@@ -1,4 +1,5 @@
 import type { ChatMsg, Slice, TreeNode } from "./types";
+import type { Detail } from "./detail";
 
 export interface ProjectContext {
   name: string;
@@ -70,11 +71,13 @@ export function streamChat(
     code: string;
     language: string;
     slice: Slice;
+    slices?: Slice[];
     understoodTitles: string[];
     messages: ChatMsg[];
     selection?: { startLine: number; endLine: number };
     projectContext?: ProjectContext;
     codePurpose?: string;
+    detail?: Detail;
   },
   onDelta: (t: string) => void,
   signal?: AbortSignal

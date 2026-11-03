@@ -7,6 +7,7 @@ import { postSlice, streamChat, streamSummary, type ProjectContext } from "./api
 import { mergeSlices, splitSlice } from "./sliceOps";
 import { clampPct, loadLayout, saveLayout } from "./layout";
 import { ThemeButton } from "./Home";
+import { loadDetail, saveDetail, type Detail } from "./detail";
 import type { Theme } from "./theme";
 import type { Session, SessionSlice } from "./types";
 
@@ -56,6 +57,9 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const [codePct, setCodePct] = useState(() => loadLayout().codePct);
   const [listPct, setListPct] = useState(() => loadLayout().listPct);
   const [listCollapsed, setListCollapsed] = useState(() => loadLayout().listCollapsed);
+  const [detail, setDetail] = useState<Detail>(loadDetail);
+  const detailRef = useRef(detail);
+  detailRef.current = detail;
   const pctRef = useRef({ codePct, listPct });
   pctRef.current = { codePct, listPct };
 
@@ -126,11 +130,13 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
           code: sessionRef.current.code,
           language: sessionRef.current.language,
           slice: s,
+          slices: sessionRef.current.slices,
           understoodTitles: understoodTitles(),
           messages,
           selection: selectionArg,
           projectContext,
           codePurpose: sessionRef.current.codePurpose,
+          detail: detailRef.current,
         },
         (t) => {
           acc += t;
@@ -530,6 +536,28 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                   </button>
                 </span>
               )}
+              <div className="detail-toggle">
+                <button
+                  className={detail === "brief" ? "active" : ""}
+                  title="简短回答，聚焦当前段"
+                  onClick={() => {
+                    setDetail("brief");
+                    saveDetail("brief");
+                  }}
+                >
+                  简洁
+                </button>
+                <button
+                  className={detail === "deep" ? "active" : ""}
+                  title="追踪上下游、标注行号、讲透原理"
+                  onClick={() => {
+                    setDetail("deep");
+                    saveDetail("deep");
+                  }}
+                >
+                  详细
+                </button>
+              </div>
               <div className="input-row">
                 <AutoTextarea
                   placeholder={streaming ? "正在回答…" : "就这一段提问（点击行号可选中范围）"}

@@ -149,7 +149,7 @@ app.post("/api/slice", async (req, res) => {
       role: "system",
       content:
         "你是代码分段助手。把用户给出的代码按逻辑块切分（import 区、函数、类、主流程、较大的循环等），" +
-        "每段约 5–40 行。只输出 JSON 数组，形如 [{\"startLine\":1,\"endLine\":8,\"title\":\"标题\"}]。" +
+        "每段约 5–40 行。只输出 JSON 数组，形如 [{\"startLine\":1,\"endLine\":8,\"title\":\"标题\",\"role\":\"一句话说明这段的职责、输入从哪来、产出交给谁\"}]。" +
         "行号从 1 开始、两端都包含，所有段加起来必须覆盖全部行。" +
         (purpose ? `\n这段代码的整体用途是：${purpose}。` : "") +
         "title 用中文且简短；若该段主体是某个函数、类或变量，标题必须带上具体名字，" +
@@ -171,7 +171,7 @@ app.post("/api/slice", async (req, res) => {
 
 // ---------- POST /api/chat ----------
 app.post("/api/chat", async (req, res) => {
-  const { code, language, slice, understoodTitles, messages, selection, projectContext, codePurpose } = req.body ?? {};
+  const { code, language, slice, understoodTitles, messages, selection, projectContext, codePurpose, detail, slices } = req.body ?? {};
   if (!code || !slice || !Number.isFinite(slice.startLine)) {
     return res.status(400).json({ error: "缺少 code 或 slice 参数。" });
   }
@@ -190,13 +190,36 @@ app.post("/api/chat", async (req, res) => {
     return res.end();
   }
 
+  const deep = detail !== "brief";
+  const BRIEF_RULE =
+    "规则：以当前这一段为中心，只回答用户当前这个问题，简洁（一般不超过 6 句）；涉及其他段落时用一句话点明关系并给出行号即可；必要时给一两行小例子。";
+  const DEEP_RULE = [
+    "规则：",
+    "1. 以当前这一段为中心，但问题涉及「谁调用它 / 结果给谁用 / 数据从哪来到哪去 / 为什么这样写」时，必须结合上面的完整代码追踪上下游，并标注具体行号（如「第 9 行」）。",
+    "2. 回答结构：先用一句话给出直接结论；再讲调用链或数据流（可用 `A → B → C` 箭头示意）；再讲关键细节；最后点出新手容易误解的地方。",
+    "3. 篇幅随问题深浅调整：简单问题简短作答，「为什么 / 怎么配合」类问题要讲透，但不要重复用户已经读懂的内容。",
+    "4. 只回答用户当前这个问题，不要把其他段落逐段讲一遍。",
+  ].join("\n");
+
+  const roleCards = Array.isArray(slices)
+    ? (slices as { startLine?: unknown; endLine?: unknown; title?: unknown; role?: unknown }[])
+        .filter((x) => Number.isFinite(x.startLine) && Number.isFinite(x.endLine))
+        .slice(0, 50)
+        .map(
+          (x, i) =>
+            `- 第${i + 1}段（${x.startLine}–${x.endLine}行）「${typeof x.title === "string" ? x.title : ""}」：${
+              typeof x.role === "string" && x.role.trim() ? x.role.trim().slice(0, 200) : "（无角色描述）"
+            }`
+        )
+    : [];
+
   const system = [
     "你是耐心的编程老师，面向编程新手，用简体中文回答。",
     projectContextText(projectContext),
     typeof codePurpose === "string" && codePurpose
       ? `完整代码的用途：${codePurpose.slice(0, 300)}。`
       : "",
-    `下面是完整的 ${language || ""} 代码（带行号，仅供参考）：`,
+    `下面是完整的 ${language || ""} 代码（带行号，回答时可引用行号）：`,
     "```",
     codeWithLineNumbers(code),
     "```",
@@ -207,7 +230,10 @@ app.post("/api/chat", async (req, res) => {
     understood.length
       ? `用户已经读懂了前面这些段落：${understood.map((t) => `「${t}」`).join("、")}。`
       : "这是用户阅读的第一段。",
-    "规则：只围绕当前这一段代码回答；每次只回答用户当前这个问题，简洁，不主动展开其他段落；必要时给一两行小例子。",
+    roleCards.length
+      ? `全部段落角色卡（帮助理解代码整体结构，回答时可提及）：\n${roleCards.join("\n")}`
+      : "",
+    deep ? DEEP_RULE : BRIEF_RULE,
   ].join("\n");
 
   const chatMsgs: ChatMessage[] = [{ role: "system", content: system }];
@@ -215,8 +241,9 @@ app.post("/api/chat", async (req, res) => {
   if (history.length === 0) {
     chatMsgs.push({
       role: "user",
-      content:
-        "请为这段代码生成一段简短概览：3–6 句话说清这段做了什么，并点出 1–2 个新手可能卡住的地方。",
+      content: deep
+        ? "请为这段代码生成一段概览：3–6 句话说清这段做了什么、它在整体代码中的位置（被谁使用、产出交给谁，标出行号），并点出 1–2 个新手可能卡住的地方。"
+        : "请为这段代码生成一段简短概览：3–6 句话说清这段做了什么，并点出 1–2 个新手可能卡住的地方。",
     });
   } else {
     for (const m of history.slice(0, -1)) {

@@ -3,6 +3,7 @@ export interface Slice {
   startLine: number;
   endLine: number;
   title: string;
+  role?: string;
 }
 
 export type SliceStatus = "unread" | "reading" | "done";

@@ -3,12 +3,14 @@ export interface Slice {
   startLine: number;
   endLine: number;
   title: string;
+  role?: string;
 }
 
 interface RawSlice {
   startLine: number;
   endLine: number;
   title: string;
+  role?: string;
 }
 
 function fallbackSlices(totalLines: number): RawSlice[] {
@@ -52,6 +54,9 @@ export function normalizeSlices(raw: string, totalLines: number): Slice[] {
           startLine: Math.round(Number(s.startLine)),
           endLine: Math.round(Number(s.endLine)),
           title: typeof s.title === "string" && s.title.trim() ? s.title.trim() : "未命名片段",
+          ...(typeof s.role === "string" && s.role.trim()
+            ? { role: s.role.trim().slice(0, 200) }
+            : {}),
         }));
     }
   } catch {
@@ -65,6 +70,7 @@ export function normalizeSlices(raw: string, totalLines: number): Slice[] {
       startLine: Math.max(1, Math.min(totalLines, s.startLine)),
       endLine: Math.max(1, Math.min(totalLines, s.endLine)),
       title: s.title,
+      ...(s.role ? { role: s.role } : {}),
     }))
     .filter((s) => s.startLine <= s.endLine)
     .sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
@@ -99,5 +105,6 @@ export function normalizeSlices(raw: string, totalLines: number): Slice[] {
     startLine: s.startLine,
     endLine: s.endLine,
     title: s.title,
+    ...(s.role ? { role: s.role } : {}),
   }));
 }

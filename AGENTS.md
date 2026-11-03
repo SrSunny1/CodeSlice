@@ -31,7 +31,7 @@ npm run typecheck -w web      # 前端类型检查
 
 - 后端切分结果必须经 `server/src/slices.ts` 的 `normalizeSlices` 修正（纯函数，有单测）。
 - 前端合并/拆分纯函数在 `web/src/sliceOps.ts`（有单测）。
-- 会话持久化在浏览器 localStorage，键 `codeslice:sessions`；另有 `codeslice:workspaces`、`codeslice:layout`、`codeslice:sidebar`、`codeslice:route`、`codeslice:theme`。
+- 会话持久化在浏览器 localStorage，键 `codeslice:sessions`；另有 `codeslice:workspaces`、`codeslice:layout`、`codeslice:sidebar`、`codeslice:route`、`codeslice:theme`、`codeslice:detail`。
 - 项目跑在 WSL + Windows 盘（/mnt/e）时，Vite 用 `web/vite.config.ts` 里的 `watch.usePolling`、后端 `tsx watch` 用 `CHOKIDAR_USEPOLLING=1` 才能收到文件变更。
 - 后端只监听 `127.0.0.1`；`/api/workspace/file` 读文件必须过 `resolveInside` 做目录边界检查。
 - 进入段落不再自动请求讲解，由「✦ 生成该段讲解」按钮触发（`web/src/Reader.tsx`）。
