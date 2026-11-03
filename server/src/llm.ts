@@ -27,7 +27,9 @@ function baseUrl(): string {
     process.env.OPENAI_BASE_URL ||
     process.env.BASE_URL ||
     "https://api.openai.com/v1"
-  ).replace(/\/$/, "");
+  )
+    .replace(/\/chat\/completions\/?$/, "")
+    .replace(/\/$/, "");
 }
 
 function model(): string {

@@ -46,7 +46,13 @@ npm run dev
 
 说明：
 
-- **免费模型推荐**：智谱 `GLM-4.7-Flash` 目前官方免费（`BASE_URL=https://open.bigmodel.cn/api/paas/v4`），其他免费渠道见各平台价格页。
+- **免费模型推荐**（都是 OpenAI 兼容，改 `.env` 三行即可）：
+
+  | 平台 | BASE_URL | 推荐 MODEL | 说明 |
+  | --- | --- | --- | --- |
+  | 阿里心流 iFlow | `https://apis.iflow.cn/v1` | `DeepSeek-V3.2` / `Qwen3-Coder` / `KIMI-K2` | 个人用户免费，可选的都是旗舰级模型（模型 ID 到 platform.iflow.cn/models 复制）；并发限 1，对本工具够用 |
+  | 智谱 BigModel | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 官方长期免费、稳定；另有推理型 `glm-4.7-flash` 也免费，但回答前会先生成一大段思考过程，高峰期易 429 |
+  | DeepSeek 官方 | `https://api.deepseek.com/v1` | `deepseek-flash` | 不免费但极便宜，响应快 |
 - 后端会自动读取 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 环境变量走代理，无需额外配置。
 - 遇到上游 503/超时，后端会自动重试最多 3 次。
 - 后端只监听 `127.0.0.1`，且读文件有目录边界检查，不会把文件系统暴露到局域网。
