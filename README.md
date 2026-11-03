@@ -50,8 +50,8 @@ npm run dev
 
   | 平台 | BASE_URL | 推荐 MODEL | 说明 |
   | --- | --- | --- | --- |
-  | 阿里心流 iFlow | `https://apis.iflow.cn/v1` | `DeepSeek-V3.2` / `Qwen3-Coder` / `KIMI-K2` | 个人用户免费，可选的都是旗舰级模型（模型 ID 到 platform.iflow.cn/models 复制）；并发限 1，对本工具够用 |
-  | 智谱 BigModel | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 官方长期免费、稳定；另有推理型 `glm-4.7-flash` 也免费，但回答前会先生成一大段思考过程，高峰期易 429 |
+  | 智谱 BigModel | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 官方长期免费、稳定、响应快；另有推理型 `glm-4.7-flash` 也免费，但回答前会先生成一大段思考过程，高峰期易 429 |
+  | 硅基流动 SiliconFlow | `https://api.siliconflow.cn/v1` | 平台标注"免费"的模型 | 注册送免费额度，部分小模型 0 元可用 |
   | DeepSeek 官方 | `https://api.deepseek.com/v1` | `deepseek-flash` | 不免费但极便宜，响应快 |
 - 后端会自动读取 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 环境变量走代理，无需额外配置。
 - 遇到上游 503/超时，后端会自动重试最多 3 次。
