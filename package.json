@@ -1,0 +1,26 @@
+{
+  "name": "codeslice",
+  "version": "0.1.0",
+  "description": "Slice-based code reading: split code into logical chunks and chat with AI per slice until you truly understand.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SrSunny1/CodeSlice.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "test": "npm test -w server && npm test -w web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
