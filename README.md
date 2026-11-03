@@ -2,6 +2,14 @@
 
 把整段代码丢给 AI 追问时，对话越拉越长，后面的问题容易被淹没。CodeSlice 把代码按逻辑切成若干段（slice），**每段一个独立对话**：看不懂就在当前段里追问，读懂一段再进下一段。也可以直接打开整个项目文件夹，先看 AI 生成的项目概览，再逐文件分段阅读。
 
+## 最省事的用法：丢给你的 AI Agent
+
+如果你电脑上装着任何编程 Agent——Codex、Claude Code、OpenCode、WorkBuddy、DeepSeek Harness、Devin……下面的安装步骤都不用看，直接对它说：
+
+> 去 GitHub 搜索 CodeSlice 项目下载下来（<https://github.com/SrSunny1/CodeSlice>），向我说明项目功能和具体使用方法。
+
+它会自己 clone 仓库、装依赖、帮你配 `.env`、启动服务，并把功能用法讲给你。
+
 ## 截图
 
 | 分段阅读（亮色） | 分段阅读（暗色） |
@@ -27,7 +35,7 @@
 - Node.js ≥ 20
 - 一个 OpenAI 兼容 API 的 Key（DeepSeek、智谱 GLM、OpenAI、Kimi 等均可；没有 Key 也可以用内置模拟模式体验）
 
-## 安装与启动
+## 手动安装与启动
 
 ```bash
 npm install
