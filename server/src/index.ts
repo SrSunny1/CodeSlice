@@ -114,11 +114,35 @@ app.post("/api/slice", async (req, res) => {
       }
     }
     push(lines.length);
-    return res.json({ slices: normalizeSlices(JSON.stringify(raw), totalLines) });
+    return res.json({
+      purpose: "（模拟）这段代码按逻辑分成若干段，便于逐段阅读。",
+      slices: normalizeSlices(JSON.stringify(raw), totalLines),
+    });
   }
 
   const err = llmConfigError();
   if (err) return res.status(500).json({ error: err });
+
+  // 先让模型概括整段代码的用途，供切分标题与后续问答对齐项目语境；
+  // 概括失败不阻塞切分。
+  let purpose = "";
+  try {
+    purpose = (
+      await chatCompletion([
+        {
+          role: "system",
+          content:
+            "用 1–2 句简体中文概括这段代码整体在做什么，面向编程新手，只输出概括文字，不要列表。" +
+            (projectContextText(projectContext) ? `\n${projectContextText(projectContext)}` : ""),
+        },
+        { role: "user", content: `语言：${language || "未知"}\n代码：\n${code.slice(0, 8000)}` },
+      ])
+    )
+      .trim()
+      .slice(0, 200);
+  } catch {
+    // ignore
+  }
 
   const messages: ChatMessage[] = [
     {
@@ -126,7 +150,10 @@ app.post("/api/slice", async (req, res) => {
       content:
         "你是代码分段助手。把用户给出的代码按逻辑块切分（import 区、函数、类、主流程、较大的循环等），" +
         "每段约 5–40 行。只输出 JSON 数组，形如 [{\"startLine\":1,\"endLine\":8,\"title\":\"标题\"}]。" +
-        "行号从 1 开始、两端都包含，所有段加起来必须覆盖全部行。title 用中文且简短。不要输出任何其他文字。" +
+        "行号从 1 开始、两端都包含，所有段加起来必须覆盖全部行。" +
+        (purpose ? `\n这段代码的整体用途是：${purpose}。` : "") +
+        "title 用中文且简短；若该段主体是某个函数、类或变量，标题必须带上具体名字，" +
+        "形如「agent_loop 核心循环」「run_bash 工具执行」「TOOL_DEFINITIONS 工具定义」。不要输出任何其他文字。" +
         (projectContextText(projectContext) ? `\n${projectContextText(projectContext)}` : ""),
     },
     {
@@ -136,7 +163,7 @@ app.post("/api/slice", async (req, res) => {
   ];
   try {
     const out = await chatCompletion(messages);
-    res.json({ slices: normalizeSlices(out, totalLines) });
+    res.json({ purpose, slices: normalizeSlices(out, totalLines) });
   } catch (e) {
     res.status(500).json({ error: `切分失败：${(e as Error).message}` });
   }
@@ -144,7 +171,7 @@ app.post("/api/slice", async (req, res) => {
 
 // ---------- POST /api/chat ----------
 app.post("/api/chat", async (req, res) => {
-  const { code, language, slice, understoodTitles, messages, selection, projectContext } = req.body ?? {};
+  const { code, language, slice, understoodTitles, messages, selection, projectContext, codePurpose } = req.body ?? {};
   if (!code || !slice || !Number.isFinite(slice.startLine)) {
     return res.status(400).json({ error: "缺少 code 或 slice 参数。" });
   }
@@ -166,6 +193,9 @@ app.post("/api/chat", async (req, res) => {
   const system = [
     "你是耐心的编程老师，面向编程新手，用简体中文回答。",
     projectContextText(projectContext),
+    typeof codePurpose === "string" && codePurpose
+      ? `完整代码的用途：${codePurpose.slice(0, 300)}。`
+      : "",
     `下面是完整的 ${language || ""} 代码（带行号，仅供参考）：`,
     "```",
     codeWithLineNumbers(code),
@@ -226,7 +256,7 @@ app.post("/api/chat", async (req, res) => {
 
 // ---------- POST /api/summary ----------
 app.post("/api/summary", async (req, res) => {
-  const { code, language, slices } = req.body ?? {};
+  const { code, language, slices, codePurpose } = req.body ?? {};
   if (!code || !Array.isArray(slices)) {
     return res.status(400).json({ error: "缺少 code 或 slices 参数。" });
   }
@@ -259,7 +289,9 @@ app.post("/api/summary", async (req, res) => {
     {
       role: "user",
       content:
-        `语言：${language || "未知"}\n\n完整代码：\n\`\`\`\n${codeWithLineNumbers(code)}\n\`\`\`\n\n用户分 ${(slices as unknown[]).length} 段读完，各段问答摘要：\n${qaDigest}`,
+        `语言：${language || "未知"}\n` +
+        (typeof codePurpose === "string" && codePurpose ? `代码整体用途：${codePurpose.slice(0, 300)}\n` : "") +
+        `\n完整代码：\n\`\`\`\n${codeWithLineNumbers(code)}\n\`\`\`\n\n用户分 ${(slices as unknown[]).length} 段读完，各段问答摘要：\n${qaDigest}`,
     },
   ];
 

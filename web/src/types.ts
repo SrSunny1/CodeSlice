@@ -26,6 +26,7 @@ export interface Session {
   language: string;
   slices: SessionSlice[];
   currentSliceId: string;
+  codePurpose?: string;
   summary?: string;
   workspaceId?: string;
   filePath?: string;

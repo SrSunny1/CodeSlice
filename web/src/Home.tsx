@@ -44,7 +44,7 @@ export default function NewPage({
     setBusy(true);
     setError("");
     try {
-      const slices = await postSlice(code, effective);
+      const { purpose, slices } = await postSlice(code, effective);
       const sessionSlices: SessionSlice[] = slices.map((s, i) => ({
         ...s,
         status: i === 0 ? "reading" : "unread",
@@ -58,6 +58,7 @@ export default function NewPage({
         language: effective,
         slices: sessionSlices,
         currentSliceId: sessionSlices[0]?.id ?? "",
+        codePurpose: purpose,
       };
       onOpen(session);
     } catch (e) {

@@ -50,6 +50,7 @@ export default function App() {
   const dragRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const readerRef = useRef<ReaderHandle>(null);
+  const [reslicing, setReslicing] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(ROUTE_KEY, JSON.stringify(route));
@@ -210,6 +211,7 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         embedded
+        onReslicingChange={setReslicing}
       />
     );
   } else if (route.kind === "workspace" && curWorkspace) {
@@ -231,6 +233,7 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         readerRef={readerRef}
+        onReslicing={setReslicing}
       />
     );
   }
@@ -280,8 +283,8 @@ export default function App() {
           )}
           <span className="reader-title">{breadcrumb}</span>
           {showReslice && (
-            <button className="link" onClick={() => readerRef.current?.reslice()}>
-              重新让 AI 切分
+            <button className="link" disabled={reslicing} onClick={() => readerRef.current?.reslice()}>
+              {reslicing ? "正在切分…" : "重新让 AI 切分"}
             </button>
           )}
         </header>

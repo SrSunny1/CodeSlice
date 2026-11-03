@@ -28,10 +28,11 @@ interface ReaderProps {
   onToggleTheme: () => void;
   projectContext?: ProjectContext;
   embedded?: boolean;
+  onReslicingChange?: (busy: boolean) => void;
 }
 
 const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
-  { session, onChange, onBack, theme, onToggleTheme, projectContext, embedded },
+  { session, onChange, onBack, theme, onToggleTheme, projectContext, embedded, onReslicingChange },
   ref
 ) {
   const [input, setInput] = useState("");
@@ -42,6 +43,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const [selection, setSelection] = useState<{ startLine: number; endLine: number } | null>(null);
   const [splitLine, setSplitLine] = useState<number | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [reslicing, setReslicing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -128,6 +130,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
           messages,
           selection: selectionArg,
           projectContext,
+          codePurpose: sessionRef.current.codePurpose,
         },
         (t) => {
           acc += t;
@@ -187,6 +190,11 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
       x.id === s.id && x.status === "unread" ? { ...x, status: "reading" as const } : x
     );
     commit({ ...session, slices, currentSliceId: s.id });
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`cl-${s.startLine}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+    });
   }
 
   function send() {
@@ -251,18 +259,23 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   }
 
   async function reslice() {
-    if (streaming || !window.confirm("重新切分会清空所有对话记录，确定吗？")) return;
+    if (streaming || reslicing || !window.confirm("重新切分会清空所有对话记录，确定吗？")) return;
     setError("");
+    setReslicing(true);
+    onReslicingChange?.(true);
     try {
-      const fresh = await postSlice(session.code, session.language, projectContext);
+      const { purpose, slices: fresh } = await postSlice(session.code, session.language, projectContext);
       const slices: SessionSlice[] = fresh.map((s, i) => ({
         ...s,
         status: i === 0 ? "reading" : "unread",
         messages: [],
       }));
-      commit({ ...session, slices, currentSliceId: slices[0]?.id ?? "", summary: undefined });
+      commit({ ...session, codePurpose: purpose, slices, currentSliceId: slices[0]?.id ?? "", summary: undefined });
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setReslicing(false);
+      onReslicingChange?.(false);
     }
   }
 
@@ -283,7 +296,12 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     }));
     try {
       const full = await streamSummary(
-        { code: sessionRef.current.code, language: sessionRef.current.language, slices: qa },
+        {
+          code: sessionRef.current.code,
+          language: sessionRef.current.language,
+          codePurpose: sessionRef.current.codePurpose,
+          slices: qa,
+        },
         (t) => {
           acc += t;
           commit({ ...sessionRef.current, summary: acc });
@@ -309,11 +327,16 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
             ← 返回
           </button>
           <span className="reader-title">{session.title}</span>
-          <button className="link" onClick={reslice}>
-            重新让 AI 切分
+          <button className="link" onClick={reslice} disabled={reslicing}>
+            {reslicing ? "正在切分…" : "重新让 AI 切分"}
           </button>
           <ThemeButton theme={theme} onToggle={onToggleTheme} />
         </header>
+      )}
+      {reslicing && (
+        <div className="reslicing-mask">
+          <span className="reslicing-pill">⏳ 正在让 AI 重新切分，请稍候…</span>
+        </div>
       )}
       <div className="reader-body" ref={bodyRef}>
         <div className="code-pane" style={{ width: `${codePct}%` }}>
@@ -336,6 +359,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                   return (
                     <div
                       key={i}
+                      id={`cl-${lineNo}`}
                       {...getLineProps({ line: lineTokens })}
                       className={cls}
                       style={{ borderLeftColor: SLICE_COLORS[si % SLICE_COLORS.length] }}

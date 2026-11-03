@@ -30,6 +30,7 @@ export default function WorkspaceMain({
   theme,
   onToggleTheme,
   readerRef,
+  onReslicing,
 }: {
   workspace: Workspace;
   filePath?: string;
@@ -40,6 +41,7 @@ export default function WorkspaceMain({
   theme: Theme;
   onToggleTheme: () => void;
   readerRef: React.RefObject<ReaderHandle>;
+  onReslicing?: (busy: boolean) => void;
 }) {
   const wsRef = useRef(workspace);
   wsRef.current = workspace;
@@ -88,7 +90,7 @@ export default function WorkspaceMain({
           filePath,
           overview: wsRef.current.overview,
         };
-        const slices = await postSlice(f.content, f.language, ctx);
+        const { purpose, slices } = await postSlice(f.content, f.language, ctx);
         if (cancelled) return;
         const sessionSlices: SessionSlice[] = slices.map((s, i) => ({
           ...s,
@@ -105,6 +107,7 @@ export default function WorkspaceMain({
           currentSliceId: sessionSlices[0]?.id ?? "",
           workspaceId: wsRef.current.id,
           filePath,
+          codePurpose: purpose,
         };
         onSessionChange(sess);
         commitWs({ ...wsRef.current, lastFilePath: filePath });
@@ -217,6 +220,7 @@ export default function WorkspaceMain({
             overview: workspace.overview,
           }}
           embedded
+          onReslicingChange={onReslicing}
         />
       );
     }

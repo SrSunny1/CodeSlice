@@ -20,19 +20,23 @@ async function checkErr(res: Response): Promise<void> {
   }
 }
 
+export interface SliceResult {
+  purpose?: string;
+  slices: Slice[];
+}
+
 export async function postSlice(
   code: string,
   language: string,
   projectContext?: ProjectContext
-): Promise<Slice[]> {
+): Promise<SliceResult> {
   const res = await fetch("/api/slice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, language, projectContext }),
   });
   await checkErr(res);
-  const j = (await res.json()) as { slices: Slice[] };
-  return j.slices;
+  return (await res.json()) as SliceResult;
 }
 
 async function streamPost(
@@ -70,6 +74,7 @@ export function streamChat(
     messages: ChatMsg[];
     selection?: { startLine: number; endLine: number };
     projectContext?: ProjectContext;
+    codePurpose?: string;
   },
   onDelta: (t: string) => void,
   signal?: AbortSignal
@@ -139,6 +144,7 @@ export function streamSummary(
   args: {
     code: string;
     language: string;
+    codePurpose?: string;
     slices: { title: string; startLine: number; endLine: number; qa: string }[];
   },
   onDelta: (t: string) => void,
