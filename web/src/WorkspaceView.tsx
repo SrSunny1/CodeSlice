@@ -8,6 +8,7 @@ import {
   streamWorkspaceChat,
 } from "./api";
 import Reader, { type ReaderHandle } from "./Reader";
+import MarkableMarkdown from "./MarkableMarkdown";
 import AutoTextarea from "./AutoTextarea";
 import type { Theme } from "./theme";
 import type { ChatMsg, Session, SessionSlice, TreeNode, Workspace } from "./types";
@@ -264,9 +265,17 @@ export default function WorkspaceMain({
         {workspace.overviewMessages.map((m, i) => (
           <div key={i} className={`msg ${m.role}`}>
             {m.role === "assistant" ? (
-              <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                {m.content}
-              </Markdown>
+              <MarkableMarkdown
+                text={m.content}
+                marks={m.marks}
+                components={mdComponents}
+                onMarksChange={(marks) => {
+                  const msgs = wsRef.current.overviewMessages.map((x, j) =>
+                    j === i ? { ...x, marks } : x
+                  );
+                  commitWs({ ...wsRef.current, overviewMessages: msgs });
+                }}
+              />
             ) : (
               <div className="user-text">{m.content}</div>
             )}

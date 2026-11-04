@@ -8,10 +8,20 @@ export interface Slice {
 
 export type SliceStatus = "unread" | "reading" | "done";
 
+export type MarkColor = "y" | "g" | "b" | "p";
+
+/** 回答正文里的高亮标注：start/end 是渲染后 textContent 的字符偏移量。 */
+export interface TextMark {
+  start: number;
+  end: number;
+  color: MarkColor;
+}
+
 export interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   selection?: { startLine: number; endLine: number };
+  marks?: TextMark[];
 }
 
 export interface SessionSlice extends Slice {

@@ -3,6 +3,7 @@ import { Highlight, themes } from "prism-react-renderer";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
+import MarkableMarkdown from "./MarkableMarkdown";
 import { postSlice, streamChat, streamSummary, type ProjectContext } from "./api";
 import { mergeSlices, splitSlice } from "./sliceOps";
 import { clampPct, loadLayout, saveLayout } from "./layout";
@@ -506,7 +507,16 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                     </span>
                   )}
                   {m.role === "assistant" ? (
-                    <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
+                    <MarkableMarkdown
+                      text={m.content}
+                      marks={m.marks}
+                      onMarksChange={(marks) => {
+                        const msgs = sessionRef.current.slices[curIdx].messages.map((x, j) =>
+                          j === i ? { ...x, marks } : x
+                        );
+                        updateSlice(curIdx, { messages: msgs });
+                      }}
+                    />
                   ) : (
                     <div className="user-text">{m.content}</div>
                   )}

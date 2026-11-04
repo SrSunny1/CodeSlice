@@ -3,7 +3,7 @@
 ## 结构
 
 - `server/`：Express + TypeScript（tsx 运行），端口 3001
-- `web/`：Vite + React + TypeScript，端口 5173，`/api` 代理到 3001
+- `web/`：Vite + React + TypeScript，端口 5273，`/api` 代理到 3001
 
 ## 常用命令
 
@@ -35,3 +35,4 @@ npm run typecheck -w web      # 前端类型检查
 - 项目跑在 WSL + Windows 盘（/mnt/e）时，Vite 用 `web/vite.config.ts` 里的 `watch.usePolling`、后端 `tsx watch` 用 `CHOKIDAR_USEPOLLING=1` 才能收到文件变更。
 - 后端只监听 `127.0.0.1`；`/api/workspace/file` 读文件必须过 `resolveInside` 做目录边界检查。
 - 进入段落不再自动请求讲解，由「✦ 生成该段讲解」按钮触发（`web/src/Reader.tsx`）。
+- AI 回答的高亮标注存 `ChatMsg.marks`（`TextMark{start,end,color}`），偏移量基于渲染后 textContent；渲染用 CSS Custom Highlight API，不改 DOM，见 `web/src/MarkableMarkdown.tsx`。浏览器不支持该 API 时标注功能自动隐藏。

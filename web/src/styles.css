@@ -25,6 +25,10 @@
   --error-bg: #fdecec;
   --error-border: #f5b5b5;
   --error-text: #a33;
+  --mark-y: rgba(255, 200, 40, 0.5);
+  --mark-g: rgba(110, 200, 130, 0.45);
+  --mark-b: rgba(110, 165, 255, 0.45);
+  --mark-p: rgba(255, 140, 175, 0.4);
 }
 
 [data-theme="dark"] {
@@ -53,6 +57,10 @@
   --error-bg: #3a2326;
   --error-border: #6e3a40;
   --error-text: #e08a92;
+  --mark-y: rgba(190, 150, 30, 0.45);
+  --mark-g: rgba(75, 155, 95, 0.45);
+  --mark-b: rgba(75, 125, 215, 0.5);
+  --mark-p: rgba(190, 95, 130, 0.45);
 }
 
 * { box-sizing: border-box; }
@@ -138,6 +146,21 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 .msg.assistant a, .summary-body a { color: var(--accent-text); }
 .sel-tag { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent-text); border-radius: 999px; padding: 2px 10px; font-size: 12px; margin-bottom: 6px; }
 .sel-tag .x { background: none; border: none; color: inherit; font-size: 14px; padding: 0; }
+
+/* 回答高亮标注（CSS Custom Highlight API，不包 DOM） */
+::highlight(cs-mark-y) { background-color: var(--mark-y); }
+::highlight(cs-mark-g) { background-color: var(--mark-g); }
+::highlight(cs-mark-b) { background-color: var(--mark-b); }
+::highlight(cs-mark-p) { background-color: var(--mark-p); }
+.mark-pal { position: fixed; z-index: 90; display: flex; align-items: center; gap: 6px; padding: 5px 9px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 6px 20px rgba(20, 30, 50, 0.25); transform: translate(-50%, -100%); }
+.mark-pal.below { transform: translate(-50%, 0); }
+.mark-pal .mark-dot { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border); padding: 0; }
+.mark-dot.y { background: var(--mark-y); }
+.mark-dot.g { background: var(--mark-g); }
+.mark-dot.b { background: var(--mark-b); }
+.mark-dot.p { background: var(--mark-p); }
+.mark-pal .mark-erase { background: none; border: none; color: var(--text-muted); font-size: 12px; padding: 0 2px; }
+.mark-pal .mark-erase:hover { color: var(--error-text); }
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .chat-input { border-top: 1px solid var(--border-soft); padding: 10px 14px; }
