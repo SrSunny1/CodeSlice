@@ -33,7 +33,7 @@ cp .env.example .env   # 然后填入你的配置
 npm run dev
 ```
 
-浏览器打开 <http://localhost:5173>。
+浏览器打开 <http://localhost:5273>。
 
 ## 配置（.env）
 
@@ -64,7 +64,7 @@ npm run dev
 ## 开发
 
 ```bash
-npm run dev          # 前后端一起起（server:3001 / web:5173）
+npm run dev          # 前后端一起起（server:3001 / web:5273）
 npm test             # server + web 的全部 vitest
 npm run build        # web 生产构建
 npm run typecheck -w server   # 或 -w web，类型检查
