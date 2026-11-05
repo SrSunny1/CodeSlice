@@ -2,6 +2,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -12,7 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { MarkColor, TextMark } from "./types";
+import type { ChatMsg, MarkColor, TextMark } from "./types";
 
 type MdComponents = ComponentProps<typeof Markdown>["components"];
 
@@ -119,7 +120,7 @@ function setPointAt(nodes: Text[], off: number): { node: Text; offset: number } 
 }
 
 /** textContent 偏移区间 -> Range，越界自动收敛到 root 内。 */
-function rangeFor(root: HTMLElement, start: number, end: number): Range | null {
+export function rangeForText(root: HTMLElement, start: number, end: number): Range | null {
   const nodes = textNodes(root);
   if (!nodes.length || end <= start) return null;
   const total = nodes.reduce((a, t) => a + t.data.length, 0);
@@ -180,7 +181,7 @@ export default function MarkableMarkdown({
     if (!root || !markable) return;
     const entries: MarkEntry[] = [];
     for (const m of marks ?? []) {
-      const r = rangeFor(root, m.start, m.end);
+      const r = rangeForText(root, m.start, m.end);
       if (r) entries.push({ range: r, mark: m });
     }
     rangeStore.set(instId, { root, entries });
@@ -237,7 +238,7 @@ export default function MarkableMarkdown({
       const idx = (marksRef.current ?? []).findIndex((m) => off > m.start && off <= m.end);
       if (idx < 0) return;
       const m = marksRef.current![idx];
-      const pos = posFor(rangeFor(root, m.start, m.end));
+      const pos = posFor(rangeForText(root, m.start, m.end));
       if (pos)
         setPal({
           ...pos,
@@ -378,6 +379,18 @@ export default function MarkableMarkdown({
   );
 }
 
+/** 把 Range 滚到滚动容器中央并临时选中，给「跳到标注」用。 */
+export function revealRange(scroller: HTMLElement, range: Range) {
+  const rc = range.getClientRects()[0];
+  if (!rc) return;
+  const cRect = scroller.getBoundingClientRect();
+  const top = rc.top - cRect.top + scroller.scrollTop;
+  scroller.scrollTo({ top: top + rc.height / 2 - scroller.clientHeight / 2, behavior: "smooth" });
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range.cloneRange());
+}
+
 // ---------------- 标注导航栏（显示点） ----------------
 interface RailDot {
   top: number;
@@ -445,16 +458,7 @@ export function MarkRail({ containerRef }: { containerRef: RefObject<HTMLElement
 
   function jump(d: RailDot) {
     const c = containerRef.current;
-    if (!c) return;
-    const rc = d.range.getClientRects()[0];
-    if (rc) {
-      const cRect = c.getBoundingClientRect();
-      const top = rc.top - cRect.top + c.scrollTop;
-      c.scrollTo({ top: top + rc.height / 2 - c.clientHeight / 2, behavior: "smooth" });
-    }
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(d.range.cloneRange());
+    if (c) revealRange(c, d.range);
   }
 
   return (
@@ -469,5 +473,116 @@ export function MarkRail({ containerRef }: { containerRef: RefObject<HTMLElement
         />
       ))}
     </>
+  );
+}
+
+// ---------------- 问答 + 标注索引条（聊天区左缘） ----------------
+interface IndexEntry {
+  kind: "q" | "mark";
+  msgIdx: number;
+  mi?: number; // mark 在消息 marks 数组里的下标
+  mark?: TextMark;
+  text: string;
+}
+
+/**
+ * 放在聊天滚动容器左侧的窄索引条：每个用户问题一个「问」图标、
+ * 每条标注一个色点，点击跳到对应位置；顶部显示问/注数量。
+ */
+export function ChatIndex({
+  containerRef,
+  messages,
+}: {
+  containerRef: RefObject<HTMLElement | null>;
+  messages: ChatMsg[];
+}) {
+  const entries = useMemo<IndexEntry[]>(() => {
+    const out: IndexEntry[] = [];
+    messages.forEach((m, i) => {
+      if (m.role === "user")
+        out.push({
+          kind: "q",
+          msgIdx: i,
+          text: m.content.replace(/\s+/g, " ").trim().slice(0, 60),
+        });
+      (m.marks ?? []).forEach((mk, mi) =>
+        out.push({ kind: "mark", msgIdx: i, mi, mark: mk, text: mk.note ?? "" })
+      );
+    });
+    return out;
+  }, [messages]);
+
+  // 标注点的文字摘要（tooltip 用），messages 变化时重建
+  const [excerpts, setExcerpts] = useState<Record<string, string>>({});
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const msgEls = c.querySelectorAll(".msg");
+    const next: Record<string, string> = {};
+    messages.forEach((m, i) => {
+      if (m.role !== "assistant" || !m.marks?.length) return;
+      const root = msgEls[i]?.querySelector(".md-mark");
+      if (!(root instanceof HTMLElement)) return;
+      m.marks.forEach((mk, mi) => {
+        const r = rangeForText(root, mk.start, mk.end);
+        if (r) next[`${i}:${mi}`] = r.toString().replace(/\s+/g, " ").trim().slice(0, 50);
+      });
+    });
+    setExcerpts((prev) => {
+      const keys = Object.keys(next);
+      const same =
+        keys.length === Object.keys(prev).length && keys.every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+  }, [messages, containerRef]);
+
+  function jump(e: IndexEntry) {
+    const c = containerRef.current;
+    if (!c) return;
+    const el = c.querySelectorAll(".msg")[e.msgIdx];
+    if (!el) return;
+    if (e.kind === "q") {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    const root = el.querySelector(".md-mark");
+    const mk = e.mark;
+    if (!mk || !(root instanceof HTMLElement)) return;
+    const r = rangeForText(root, mk.start, mk.end);
+    if (r) revealRange(c, r);
+  }
+
+  if (!entries.length) return null;
+  const qCount = entries.filter((e) => e.kind === "q").length;
+  const mCount = entries.length - qCount;
+
+  return (
+    <div className="chat-index">
+      <div className="ci-counts">
+        <div>问 {qCount}</div>
+        <div>注 {mCount}</div>
+      </div>
+      <div className="ci-list">
+        {entries.map((e, i) => {
+          const tip =
+            e.kind === "q"
+              ? e.text
+              : e.text
+                ? `📝 ${e.text}`
+                : excerpts[`${e.msgIdx}:${e.mi}`] ?? "";
+          return (
+            <button key={i} className="ci-row" title={tip} onClick={() => jump(e)}>
+              {e.kind === "q" ? (
+                <span className="ci-q">问</span>
+              ) : (
+                <span
+                  className={`ci-m m-${e.mark!.color}${e.mark!.note ? " note" : ""}`}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

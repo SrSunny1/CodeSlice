@@ -3,7 +3,7 @@ import { Highlight, themes } from "prism-react-renderer";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
-import MarkableMarkdown, { MarkRail } from "./MarkableMarkdown";
+import MarkableMarkdown, { ChatIndex, MarkRail } from "./MarkableMarkdown";
 import { postSlice, streamChat, streamSummary, type ProjectContext } from "./api";
 import { mergeSlices, splitSlice } from "./sliceOps";
 import { clampPct, loadLayout, saveLayout } from "./layout";
@@ -491,7 +491,9 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                 第 {cur?.startLine}–{cur?.endLine} 行
               </span>
             </div>
-            <div className="chat-messages" ref={chatScrollRef}>
+            <div className="chat-body">
+              <ChatIndex containerRef={chatScrollRef} messages={cur?.messages ?? []} />
+              <div className="chat-messages" ref={chatScrollRef}>
               {cur && cur.messages.length === 0 && !streaming && (
                 <div className="chat-empty">
                   <p>这一段还没有讲解。可以先生成概览，或直接提问。</p>
@@ -531,6 +533,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
               )}
               <MarkRail containerRef={chatScrollRef} />
               <div ref={chatEndRef} />
+              </div>
             </div>
             {error && <div className="error-box">{error}</div>}
             <div className="chat-input">

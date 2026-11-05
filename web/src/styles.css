@@ -140,7 +140,23 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 
 .chat-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-top: 1px solid var(--border-soft); }
 .chat-header { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: baseline; }
-.chat-messages { flex: 1; overflow: auto; padding: 12px 14px; position: relative; }
+.chat-body { flex: 1; display: flex; min-height: 0; }
+.chat-messages { flex: 1; min-width: 0; overflow: auto; padding: 12px 14px; position: relative; }
+/* 问答 + 标注索引条（聊天区左缘） */
+.chat-index { width: 34px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel-2); border-right: 1px solid var(--border-soft); }
+.ci-counts { flex-shrink: 0; padding: 8px 0 5px; text-align: center; font-size: 10px; color: var(--text-muted); line-height: 1.6; border-bottom: 1px solid var(--border-soft); }
+.ci-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; }
+.ci-row { width: 100%; display: flex; justify-content: center; background: none; border: none; padding: 2px 0; cursor: pointer; }
+.ci-q { width: 18px; height: 18px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; line-height: 18px; text-align: center; }
+.ci-row:hover .ci-q { transform: scale(1.15); }
+.ci-m { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.ci-m.m-y { background: var(--mark-y); }
+.ci-m.m-g { background: var(--mark-g); }
+.ci-m.m-b { background: var(--mark-b); }
+.ci-m.m-p { background: var(--mark-p); }
+.ci-m.note { width: 10px; height: 10px; border-radius: 2px; transform: rotate(45deg); }
+.ci-row:hover .ci-m { transform: scale(1.4); }
+.ci-row:hover .ci-m.note { transform: rotate(45deg) scale(1.4); }
 .chat-empty { text-align: center; padding: 28px 16px; color: var(--text-muted); font-size: 13px; }
 .chat-empty .primary { margin-top: 8px; }
 .msg { margin-bottom: 14px; font-size: 14px; line-height: 1.65; }
