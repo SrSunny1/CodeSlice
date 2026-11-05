@@ -29,6 +29,10 @@
   --mark-g: rgba(110, 200, 130, 0.45);
   --mark-b: rgba(110, 165, 255, 0.45);
   --mark-p: rgba(255, 140, 175, 0.4);
+  --ul-y: #d89a00;
+  --ul-g: #3d9e5f;
+  --ul-b: #4a6fd4;
+  --ul-p: #d94f7d;
 }
 
 [data-theme="dark"] {
@@ -61,6 +65,10 @@
   --mark-g: rgba(75, 155, 95, 0.45);
   --mark-b: rgba(75, 125, 215, 0.5);
   --mark-p: rgba(190, 95, 130, 0.45);
+  --ul-y: #e0b43a;
+  --ul-g: #5fbf7f;
+  --ul-b: #8fb1f5;
+  --ul-p: #e07fa0;
 }
 
 * { box-sizing: border-box; }
@@ -132,7 +140,7 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 
 .chat-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-top: 1px solid var(--border-soft); }
 .chat-header { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: baseline; }
-.chat-messages { flex: 1; overflow: auto; padding: 12px 14px; }
+.chat-messages { flex: 1; overflow: auto; padding: 12px 14px; position: relative; }
 .chat-empty { text-align: center; padding: 28px 16px; color: var(--text-muted); font-size: 13px; }
 .chat-empty .primary { margin-top: 8px; }
 .msg { margin-bottom: 14px; font-size: 14px; line-height: 1.65; }
@@ -147,20 +155,39 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 .sel-tag { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent-text); border-radius: 999px; padding: 2px 10px; font-size: 12px; margin-bottom: 6px; }
 .sel-tag .x { background: none; border: none; color: inherit; font-size: 14px; padding: 0; }
 
-/* 回答高亮标注（CSS Custom Highlight API，不包 DOM） */
+/* 回答高亮标注（CSS Custom Highlight API，不包 DOM）；-n 后缀 = 带文字备注，额外加下划线 */
 ::highlight(cs-mark-y) { background-color: var(--mark-y); }
 ::highlight(cs-mark-g) { background-color: var(--mark-g); }
 ::highlight(cs-mark-b) { background-color: var(--mark-b); }
 ::highlight(cs-mark-p) { background-color: var(--mark-p); }
+::highlight(cs-mark-yn) { background-color: var(--mark-y); text-decoration: underline 2px var(--ul-y); }
+::highlight(cs-mark-gn) { background-color: var(--mark-g); text-decoration: underline 2px var(--ul-g); }
+::highlight(cs-mark-bn) { background-color: var(--mark-b); text-decoration: underline 2px var(--ul-b); }
+::highlight(cs-mark-pn) { background-color: var(--mark-p); text-decoration: underline 2px var(--ul-p); }
 .mark-pal { position: fixed; z-index: 90; display: flex; align-items: center; gap: 6px; padding: 5px 9px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 6px 20px rgba(20, 30, 50, 0.25); transform: translate(-50%, -100%); }
 .mark-pal.below { transform: translate(-50%, 0); }
+.mark-pal.editing { flex-direction: column; align-items: stretch; gap: 6px; border-radius: 10px; }
+.mark-pal .mark-pal-row { display: flex; align-items: center; gap: 6px; justify-content: center; }
+.mark-pal .mark-note-editor { display: flex; flex-direction: column; gap: 4px; }
+.mark-pal .mark-note-editor textarea { width: 220px; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); color: var(--text); resize: vertical; }
+.mark-pal .mark-note-editor .link { align-self: flex-end; }
 .mark-pal .mark-dot { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border); padding: 0; }
 .mark-dot.y { background: var(--mark-y); }
 .mark-dot.g { background: var(--mark-g); }
 .mark-dot.b { background: var(--mark-b); }
 .mark-dot.p { background: var(--mark-p); }
+.mark-pal .mark-note { background: none; border: none; color: var(--text-muted); font-size: 14px; padding: 0 2px; }
+.mark-pal .mark-note:hover { color: var(--accent-text); }
 .mark-pal .mark-erase { background: none; border: none; color: var(--text-muted); font-size: 12px; padding: 0 2px; }
 .mark-pal .mark-erase:hover { color: var(--error-text); }
+/* 标注导航点：放在滚动容器内，绝对定位、随内容滚动 */
+.mark-rail-dot { position: absolute; right: 3px; width: 9px; height: 9px; margin-top: -4.5px; border: none; padding: 0; border-radius: 50%; cursor: pointer; z-index: 6; opacity: 0.9; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
+.mark-rail-dot:hover { transform: scale(1.5); opacity: 1; }
+.mark-rail-dot.m-y { background: var(--mark-y); }
+.mark-rail-dot.m-g { background: var(--mark-g); }
+.mark-rail-dot.m-b { background: var(--mark-b); }
+.mark-rail-dot.m-p { background: var(--mark-p); }
+.mark-rail-dot.note { border-radius: 2px; transform: rotate(45deg); }
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .chat-input { border-top: 1px solid var(--border-soft); padding: 10px 14px; }
@@ -229,7 +256,7 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 .crumb { color: var(--text-muted); font-weight: normal; font-size: 13px; }
 .overview-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
 .overview-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); }
-.overview-body { flex: 1; overflow: auto; padding: 16px 22px; }
+.overview-body { flex: 1; overflow: auto; padding: 16px 22px; position: relative; }
 .overview-body p { margin: 8px 0; }
 .overview-body pre { background: var(--pre-bg); color: var(--pre-text); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12.5px; }
 .overview-body code { background: var(--inline-code-bg); padding: 1px 5px; border-radius: 4px; }

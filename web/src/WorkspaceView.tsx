@@ -8,7 +8,7 @@ import {
   streamWorkspaceChat,
 } from "./api";
 import Reader, { type ReaderHandle } from "./Reader";
-import MarkableMarkdown from "./MarkableMarkdown";
+import MarkableMarkdown, { MarkRail } from "./MarkableMarkdown";
 import AutoTextarea from "./AutoTextarea";
 import type { Theme } from "./theme";
 import type { ChatMsg, Session, SessionSlice, TreeNode, Workspace } from "./types";
@@ -54,6 +54,7 @@ export default function WorkspaceMain({
   const [ovStreamText, setOvStreamText] = useState("");
   const ovReqRef = useRef(false);
   const ovAbortRef = useRef<AbortController | null>(null);
+  const ovScrollRef = useRef<HTMLDivElement>(null);
   const [chatInput, setChatInput] = useState("");
 
   const filePaths = useMemo(() => collectFilePaths(workspace.tree), [workspace.tree]);
@@ -252,7 +253,7 @@ export default function WorkspaceMain({
           </button>
         </span>
       </div>
-      <div className="overview-body reading-font">
+      <div className="overview-body reading-font" ref={ovScrollRef}>
         {!workspace.overview && !ovStreaming && !ovStreamText && (
           <p className="hint">正在生成概览…</p>
         )}
@@ -281,6 +282,7 @@ export default function WorkspaceMain({
             )}
           </div>
         ))}
+        <MarkRail containerRef={ovScrollRef} />
       </div>
       <div className="chat-input">
         <div className="input-row">

@@ -15,6 +15,8 @@ export interface TextMark {
   start: number;
   end: number;
   color: MarkColor;
+  /** 文字标注内容（有备注的标注会带下划线） */
+  note?: string;
 }
 
 export interface ChatMsg {

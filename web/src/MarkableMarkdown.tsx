@@ -2,10 +2,12 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useReducer,
   useRef,
   useState,
   type ComponentProps,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
@@ -33,19 +35,56 @@ function marksSupported(): boolean {
   return !!hlRegistry() && !!(globalThis as { Highlight?: unknown }).Highlight;
 }
 
-// 所有实例的 Range 按颜色汇总后统一注册（::highlight 的样式名是全页的，只有 4 个）
-const rangeStore = new Map<string, Map<MarkColor, Range[]>>();
+// ---- 全局标注注册表：每个实例的 Range 按颜色（有无备注）汇总注册；
+//      MarkRail 也从这里取点位信息 ----
+interface MarkEntry {
+  range: Range;
+  mark: TextMark;
+}
+interface InstMarks {
+  root: HTMLElement;
+  entries: MarkEntry[];
+}
+const rangeStore = new Map<string, InstMarks>();
+const markListeners = new Set<() => void>();
+let notifyQueued = false;
+function notifyMarks() {
+  if (notifyQueued) return;
+  notifyQueued = true;
+  queueMicrotask(() => {
+    notifyQueued = false;
+    markListeners.forEach((f) => f());
+  });
+}
+export function subscribeMarks(fn: () => void): () => void {
+  markListeners.add(fn);
+  return () => {
+    markListeners.delete(fn);
+  };
+}
+
+function setReg(reg: HighlightRegistryLike, name: string, ranges: Range[]) {
+  const h = ranges.length ? makeHighlight(ranges) : null;
+  if (h) reg.set(name, h);
+  else reg.delete(name);
+}
 function rebuildHighlights() {
   const reg = hlRegistry();
   if (!reg) return;
-  for (const c of MARK_COLORS) {
-    const name = `cs-mark-${c}`;
-    const ranges: Range[] = [];
-    for (const g of rangeStore.values()) ranges.push(...(g.get(c) ?? []));
-    const h = ranges.length ? makeHighlight(ranges) : null;
-    if (h) reg.set(name, h);
-    else reg.delete(name);
+  const buckets = new Map<MarkColor, { plain: Range[]; noted: Range[] }>();
+  for (const inst of rangeStore.values()) {
+    for (const e of inst.entries) {
+      const b = buckets.get(e.mark.color) ?? { plain: [], noted: [] };
+      (e.mark.note ? b.noted : b.plain).push(e.range);
+      buckets.set(e.mark.color, b);
+    }
   }
+  for (const c of MARK_COLORS) {
+    const b = buckets.get(c) ?? { plain: [], noted: [] };
+    setReg(reg, `cs-mark-${c}`, b.plain);
+    setReg(reg, `cs-mark-${c}n`, b.noted);
+  }
+  notifyMarks();
 }
 
 // ---- 渲染后文本偏移量 <-> DOM Range ----
@@ -99,19 +138,22 @@ function overlaps(m: TextMark, start: number, end: number): boolean {
   return m.start < end && m.end > start;
 }
 
+// ---------------- 调色板浮板 ----------------
 interface PalState {
   x: number;
   y: number;
   below: boolean;
   /** 有选区：对 [start,end) 新增/擦除 */
   range?: { start: number; end: number };
-  /** 点中已有标注：改色/删除 */
+  /** 点中已有标注：改色/删除/备注 */
   markIdx?: number;
+  editingNote: boolean;
+  noteDraft: string;
 }
 
 /**
- * 可标注的 Markdown：选中文字弹出调色板，标注以 textContent 偏移量持久化，
- * 用 CSS Custom Highlight API 渲染（不改动 DOM，与 React 渲染无冲突）。
+ * 可标注的 Markdown：选中文字弹出调色板，可填色也可写文字备注；
+ * 标注以 textContent 偏移量持久化，用 CSS Custom Highlight API 渲染。
  */
 export default function MarkableMarkdown({
   text,
@@ -136,16 +178,12 @@ export default function MarkableMarkdown({
   useLayoutEffect(() => {
     const root = boxRef.current;
     if (!root || !markable) return;
-    const groups = new Map<MarkColor, Range[]>();
+    const entries: MarkEntry[] = [];
     for (const m of marks ?? []) {
       const r = rangeFor(root, m.start, m.end);
-      if (r) {
-        const arr = groups.get(m.color) ?? [];
-        arr.push(r);
-        groups.set(m.color, arr);
-      }
+      if (r) entries.push({ range: r, mark: m });
     }
-    rangeStore.set(instId, groups);
+    rangeStore.set(instId, { root, entries });
     rebuildHighlights();
     return () => {
       rangeStore.delete(instId);
@@ -194,13 +232,19 @@ export default function MarkableMarkdown({
     };
 
     if (sel.isCollapsed) {
-      // 单击落在已有标注内 -> 打开该标注的编辑浮板（右缘归前一段，见 overlaps）
+      // 单击落在已有标注内 -> 打开该标注的编辑浮板（右缘归前一段）
       const off = pointOffset(root, sel.anchorNode!, sel.anchorOffset);
       const idx = (marksRef.current ?? []).findIndex((m) => off > m.start && off <= m.end);
       if (idx < 0) return;
       const m = marksRef.current![idx];
       const pos = posFor(rangeFor(root, m.start, m.end));
-      if (pos) setPal({ ...pos, markIdx: idx });
+      if (pos)
+        setPal({
+          ...pos,
+          markIdx: idx,
+          editingNote: !!m.note,
+          noteDraft: m.note ?? "",
+        });
       return;
     }
     const a = pointOffset(root, sel.anchorNode!, sel.anchorOffset);
@@ -209,7 +253,7 @@ export default function MarkableMarkdown({
     const end = Math.max(a, b);
     if (end - start < 1) return;
     const pos = posFor(sel.getRangeAt(0));
-    if (pos) setPal({ ...pos, range: { start, end } });
+    if (pos) setPal({ ...pos, range: { start, end }, editingNote: false, noteDraft: "" });
   }
 
   function emit(next: TextMark[]) {
@@ -221,10 +265,16 @@ export default function MarkableMarkdown({
   function applyColor(color: MarkColor) {
     const cur = marksRef.current ?? [];
     if (pal?.markIdx != null) {
-      emit(cur.map((m, i) => (i === pal.markIdx ? { ...m, color } : m)));
+      const next = cur.map((m, i) => (i === pal.markIdx ? { ...m, color } : m));
+      if (pal.editingNote) {
+        // 编辑备注时保持浮板不关
+        onMarksChange?.(next.length ? next : undefined);
+        setPal({ ...pal });
+      } else {
+        emit(next);
+      }
     } else if (pal?.range) {
       const { start, end } = pal.range;
-      // 与新区间相交的旧标注被新色覆盖
       const next = cur.filter((m) => !overlaps(m, start, end));
       next.push({ start, end, color });
       next.sort((a, b) => a.start - b.start);
@@ -242,6 +292,35 @@ export default function MarkableMarkdown({
     }
   }
 
+  function startNote() {
+    const cur = marksRef.current ?? [];
+    if (pal?.markIdx != null) {
+      const m = cur[pal.markIdx];
+      setPal({ ...pal, editingNote: true, noteDraft: m?.note ?? "" });
+      return;
+    }
+    if (!pal?.range) return;
+    // 选区写备注：先落成黄色底标（备注颜色可再改），再就地编辑
+    const { start, end } = pal.range;
+    const next = cur.filter((m) => !overlaps(m, start, end));
+    next.push({ start, end, color: "y" });
+    next.sort((a, b) => a.start - b.start);
+    const idx = next.findIndex((m) => m.start === start && m.end === end);
+    onMarksChange?.(next);
+    setPal({ ...pal, markIdx: idx, range: undefined, editingNote: true, noteDraft: "" });
+  }
+
+  function saveNote() {
+    const cur = marksRef.current ?? [];
+    if (pal?.markIdx == null) return;
+    const note = pal.noteDraft.trim();
+    emit(
+      cur.map((m, i) =>
+        i === pal.markIdx ? { ...m, note: note || undefined } : m
+      )
+    );
+  }
+
   return (
     <div className="md-mark" ref={boxRef} onMouseUp={onMouseUp}>
       <Markdown remarkPlugins={[remarkGfm]} components={components}>
@@ -251,24 +330,144 @@ export default function MarkableMarkdown({
         createPortal(
           <div
             ref={palRef}
-            className={`mark-pal${pal.below ? " below" : ""}`}
+            className={`mark-pal${pal.below ? " below" : ""}${pal.editingNote ? " editing" : ""}`}
             style={{ left: pal.x, top: pal.y }}
-            onMouseDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => {
+              // 输入框要能聚焦，其余区域阻止默认行为以保留文字选区
+              if ((e.target as HTMLElement).tagName !== "TEXTAREA") e.preventDefault();
+            }}
+            onMouseUp={(e) => e.stopPropagation()}
           >
-            {MARK_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`mark-dot ${c}`}
-                title={`${COLOR_LABEL[c]}色标注`}
-                onClick={() => applyColor(c)}
-              />
-            ))}
-            <button className="mark-erase" title="清除选区内/该条标注" onClick={erase}>
-              清除
-            </button>
+            <div className="mark-pal-row">
+              {MARK_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`mark-dot ${c}`}
+                  title={`${COLOR_LABEL[c]}色标注`}
+                  onClick={() => applyColor(c)}
+                />
+              ))}
+              <button className="mark-note" title="写文字标注" onClick={startNote}>
+                ✎
+              </button>
+              <button className="mark-erase" title="清除标注" onClick={erase}>
+                清除
+              </button>
+            </div>
+            {pal.editingNote && (
+              <div className="mark-note-editor">
+                <textarea
+                  autoFocus
+                  rows={3}
+                  placeholder="写点标注…（Ctrl+Enter 保存）"
+                  value={pal.noteDraft}
+                  onChange={(e) => setPal({ ...pal, noteDraft: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveNote();
+                  }}
+                />
+                <button className="link" onClick={saveNote}>
+                  保存
+                </button>
+              </div>
+            )}
           </div>,
           document.body
         )}
     </div>
+  );
+}
+
+// ---------------- 标注导航栏（显示点） ----------------
+interface RailDot {
+  top: number;
+  color: MarkColor;
+  hasNote: boolean;
+  excerpt: string;
+  note?: string;
+  range: Range;
+}
+
+function sameDots(a: RailDot[], b: RailDot[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (x, i) =>
+        x.top === b[i].top &&
+        x.color === b[i].color &&
+        x.hasNote === b[i].hasNote &&
+        x.excerpt === b[i].excerpt &&
+        x.note === b[i].note
+    )
+  );
+}
+
+/** 放进滚动容器内部：每个标注一个点，点击跳转并高亮选中。 */
+export function MarkRail({ containerRef }: { containerRef: RefObject<HTMLElement | null> }) {
+  const [dots, setDots] = useState<RailDot[]>([]);
+  const [, bump] = useReducer((x: number) => x + 1, 0);
+
+  useEffect(() => subscribeMarks(bump), []);
+
+  // 每次渲染后重算点位（父组件更新/标注变化/自身 bump 都会走到这里）
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const cRect = c.getBoundingClientRect();
+    const found: RailDot[] = [];
+    for (const inst of rangeStore.values()) {
+      if (!c.contains(inst.root)) continue;
+      for (const e of inst.entries) {
+        const rc = e.range.getClientRects()[0];
+        if (!rc) continue;
+        found.push({
+          top: rc.top - cRect.top + c.scrollTop,
+          color: e.mark.color,
+          hasNote: !!e.mark.note,
+          excerpt: e.range.toString().replace(/\s+/g, " ").trim().slice(0, 50),
+          note: e.mark.note,
+          range: e.range,
+        });
+      }
+    }
+    found.sort((a, b) => a.top - b.top);
+    setDots((prev) => (sameDots(prev, found) ? prev : found));
+  });
+
+  // 容器尺寸变化（拖分栏/窗口缩放）时重算
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const ro = new ResizeObserver(bump);
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, [containerRef]);
+
+  function jump(d: RailDot) {
+    const c = containerRef.current;
+    if (!c) return;
+    const rc = d.range.getClientRects()[0];
+    if (rc) {
+      const cRect = c.getBoundingClientRect();
+      const top = rc.top - cRect.top + c.scrollTop;
+      c.scrollTo({ top: top + rc.height / 2 - c.clientHeight / 2, behavior: "smooth" });
+    }
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(d.range.cloneRange());
+  }
+
+  return (
+    <>
+      {dots.map((d, i) => (
+        <button
+          key={i}
+          className={`mark-rail-dot m-${d.color}${d.hasNote ? " note" : ""}`}
+          style={{ top: d.top }}
+          title={`${d.hasNote ? "📝 " + (d.note ?? "") : ""}${d.excerpt}`}
+          onClick={() => jump(d)}
+        />
+      ))}
+    </>
   );
 }
