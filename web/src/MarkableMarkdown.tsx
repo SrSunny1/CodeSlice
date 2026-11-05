@@ -18,7 +18,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
 import { loadLayout, saveLayout } from "./layout";
-import { countTree, getMsg, indexTree, pathKey, type IndexNode } from "./threads";
+import { countTree, indexTree, pathKey, type IndexNode } from "./threads";
 import type {
   ChatMsg,
   InlineThread,
@@ -56,8 +56,10 @@ function marksSupported(): boolean {
 
 // ---- 宿主通过 ThreadCtx 提供追问/标注回调；无 provider 时退化为纯渲染 ----
 export interface ThreadCtxValue {
-  /** 当前消息列表（嵌套实例各自对应自己的列表），用于定位追问块的同级序号 */
+  /** 当前消息列表（嵌套实例各自对应自己的列表） */
   messages: ChatMsg[];
+  /** 追问轮次表：pathKey(threadPath) -> 该回答内的轮次（1 起） */
+  rounds: ReadonlyMap<string, number>;
   /** 有任何流式请求在跑（禁用各发送按钮） */
   busy: boolean;
   /** 正在流式输出的线程 pathKey，主对话为 null */
@@ -309,17 +311,13 @@ function InlineThreadBlock({ t, tp }: { t: InlineThread; tp: ThreadPath }) {
   const selfRef = useRef<HTMLDivElement>(null);
   const [q, setQ] = useState("");
   const depth = tp.length / 2;
-  // 同级序号 + 深度在 5 种色相里循环：同一处多个追问块颜色互不相同，嵌套越深越换色
-  const parentMsg = ctx?.messages
-    ? getMsg(ctx.messages, tp.slice(0, -1) as MsgPath)
-    : undefined;
-  const sibIdx =
-    parentMsg?.threads?.findIndex((x) => x.id === tp[tp.length - 1]) ?? 0;
-  const colorIdx = Math.abs(sibIdx + depth) % 5;
   const collapsed = !!t.collapsed;
   const turns = t.messages.filter((m) => m.role === "user").length;
   const key = pathKey(tp);
   const streaming = ctx?.streamingKey === key;
+  // 轮次（每条回答内按文档序编号）：决定底色色相和块头「第 N 轮」
+  const round = ctx?.rounds.get(key) ?? 0;
+  const colorIdx = round > 0 ? (round - 1) % 5 : 0;
 
   function sendReply() {
     const text = q.trim();
@@ -353,8 +351,9 @@ function InlineThreadBlock({ t, tp }: { t: InlineThread; tp: ThreadPath }) {
         onClick={() => ctx?.onPatchThread(tp, { collapsed: !collapsed })}
       >
         <span className="it-caret">{collapsed ? "▸" : "▾"}</span>
+        {round > 0 && <span className="it-round">第{round}轮</span>}
         <span className="it-title">
-          💬 追问「{trunc(t.quote, 30)}」 · {turns} 轮
+          追问「{trunc(t.quote, 30)}」 · {turns} 问
         </span>
         <span className="it-badge">追问</span>
         {depth >= 4 && <span className="it-depth-tag">第 {depth} 层</span>}

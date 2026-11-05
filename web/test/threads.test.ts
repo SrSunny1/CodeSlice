@@ -6,8 +6,10 @@ import {
   getMsg,
   getThread,
   indexTree,
+  pathKey,
   removeThread,
   threadHistory,
+  threadRoundMap,
   updateMsg,
   updateThread,
 } from "../src/threads";
@@ -214,5 +216,42 @@ describe("flattenQA", () => {
         "答：a3",
       ].join("\n")
     );
+  });
+});
+
+describe("threadRoundMap", () => {
+  it("顶层追问块各自从第 1 轮起，嵌套块在所属块内续号", () => {
+    const t1 = thread("t1", [
+      U("q1"),
+      A("a1", { threads: [thread("t3", [U("x"), A("y")])] }),
+    ]);
+    const msgs: ChatMsg[] = [
+      U("q"),
+      A("a", { threads: [t1, thread("t2", [U("q2"), A("a2")])] }),
+    ];
+    const map = threadRoundMap(msgs);
+    expect(map.get(pathKey([1, "t1"]))).toBe(1);
+    // t3 嵌套在 t1 的回答里 → t1 块内第 2 轮
+    expect(map.get(pathKey([1, "t1", 1, "t3"]))).toBe(2);
+    // t2 是回答的另一个地方 → 重新从第 1 轮
+    expect(map.get(pathKey([1, "t2"]))).toBe(1);
+  });
+
+  it("块内多个嵌套追问按锚点位置续号", () => {
+    const t1 = thread("t1", [
+      U("q"),
+      A("a1", {
+        threads: [
+          thread("ta", [U("x"), A("y")], { start: 20 }),
+          thread("tb", [U("x"), A("y")], { start: 5 }),
+        ],
+      }),
+    ]);
+    const msgs: ChatMsg[] = [U("q"), A("a", { threads: [t1] })];
+    const map = threadRoundMap(msgs);
+    expect(map.get(pathKey([1, "t1"]))).toBe(1);
+    // tb(start5) 锚点靠前 → 第 2 轮；ta(start20) → 第 3 轮
+    expect(map.get(pathKey([1, "t1", 1, "tb"]))).toBe(2);
+    expect(map.get(pathKey([1, "t1", 1, "ta"]))).toBe(3);
   });
 });

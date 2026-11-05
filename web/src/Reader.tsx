@@ -18,6 +18,7 @@ import {
   pathKey,
   removeThread,
   threadHistory,
+  threadRoundMap,
   updateMsg,
   updateThread,
 } from "./threads";
@@ -228,8 +229,14 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     patchSliceMessages(curSliceId(), (ms) => removeThread(ms, tp));
   }
 
+  const threadRounds = useMemo(
+    () => threadRoundMap(cur?.messages ?? []),
+    [cur?.messages]
+  );
+
   const threadCtx: ThreadCtxValue = {
     messages: cur?.messages ?? [],
+    rounds: threadRounds,
     busy: streaming,
     streamingKey: streamKey === "main" || streamKey === "summary" ? null : streamKey,
     streamText,

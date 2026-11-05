@@ -33,12 +33,12 @@
   --thread-border: #8b5cf6;
   --thread-badge-bg: #8b5cf6;
   --thread-badge-fg: #ffffff;
-  /* 追问块 5 色相：同级序号+深度循环取色 */
+  /* 追问块 5 色相：按轮次循环取色，相邻轮次色相尽量拉开 */
   --t0-bg: #f3eefc; --t0-bd: #8b5cf6; --t0-badge: #8b5cf6; --t0-badge-fg: #ffffff;
-  --t1-bg: #fdeef3; --t1-bd: #d14d7c; --t1-badge: #c74378; --t1-badge-fg: #ffffff;
-  --t2-bg: #e9f7ee; --t2-bd: #3aa676; --t2-badge: #2f9663; --t2-badge-fg: #ffffff;
-  --t3-bg: #fdf3e0; --t3-bd: #d99a26; --t3-badge: #b57f1e; --t3-badge-fg: #ffffff;
-  --t4-bg: #e8f2fd; --t4-bd: #4a86d8; --t4-badge: #3f7cc4; --t4-badge-fg: #ffffff;
+  --t1-bg: #e9f7ee; --t1-bd: #3aa676; --t1-badge: #2f9663; --t1-badge-fg: #ffffff;
+  --t2-bg: #fdf3e0; --t2-bd: #d99a26; --t2-badge: #b57f1e; --t2-badge-fg: #ffffff;
+  --t3-bg: #e8f2fd; --t3-bd: #4a86d8; --t3-badge: #3f7cc4; --t3-badge-fg: #ffffff;
+  --t4-bg: #fdeef3; --t4-bd: #d14d7c; --t4-badge: #c74378; --t4-badge-fg: #ffffff;
   --ul-y: #d89a00;
   --ul-g: #3d9e5f;
   --ul-b: #4a6fd4;
@@ -81,10 +81,10 @@
   --thread-badge-fg: #1e1a2e;
   /* 追问块 5 色相（暗色） */
   --t0-bg: #2a2440; --t0-bd: #a78bfa; --t0-badge: #a78bfa; --t0-badge-fg: #1e1a2e;
-  --t1-bg: #33202c; --t1-bd: #e08aa8; --t1-badge: #d9708f; --t1-badge-fg: #2a1420;
-  --t2-bg: #1d2e26; --t2-bd: #6fcf9f; --t2-badge: #4fbf85; --t2-badge-fg: #10251c;
-  --t3-bg: #33291a; --t3-bd: #d9a94e; --t3-badge: #c99a3f; --t3-badge-fg: #2a1f0e;
-  --t4-bg: #1c2a3d; --t4-bd: #7aa8e0; --t4-badge: #6a97d8; --t4-badge-fg: #14202f;
+  --t1-bg: #1d2e26; --t1-bd: #6fcf9f; --t1-badge: #4fbf85; --t1-badge-fg: #10251c;
+  --t2-bg: #33291a; --t2-bd: #d9a94e; --t2-badge: #c99a3f; --t2-badge-fg: #2a1f0e;
+  --t3-bg: #1c2a3d; --t3-bd: #7aa8e0; --t3-badge: #6a97d8; --t3-badge-fg: #14202f;
+  --t4-bg: #33202c; --t4-bd: #e08aa8; --t4-badge: #d9708f; --t4-badge-fg: #2a1420;
   --ul-y: #e0b43a;
   --ul-g: #5fbf7f;
   --ul-b: #8fb1f5;
@@ -247,6 +247,7 @@ body.drag-v .splitter-v, body.drag-h .splitter-h { background: var(--accent); }
 .inline-thread.it-c4 { --it-bg: var(--t4-bg); --it-bd: var(--t4-bd); --it-badge: var(--t4-badge); --it-badge-fg: var(--t4-badge-fg); }
 .inline-thread { margin: 8px 0; border-left: 3px solid var(--it-bd, var(--thread-border)); background: var(--it-bg, var(--thread-bg)); border-radius: 6px; padding: 6px 10px; font-size: calc(13.5px * var(--z, 1)); }
 .it-badge { flex: none; font-size: calc(10px * var(--z, 1)); line-height: 15px; padding: 0 6px; border-radius: 999px; background: var(--it-badge, var(--thread-badge-bg)); color: var(--it-badge-fg, var(--thread-badge-fg)); font-weight: 600; }
+.it-round { flex: none; font-size: calc(10px * var(--z, 1)); font-weight: 600; line-height: 15px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--it-bd, var(--thread-border)); color: var(--it-bd, var(--thread-border)); }
 /* 嵌套本身靠父块 padding+border 缩进（左 13px / 右 10px）；第 4 层起抵消掉，不再变窄 */
 .inline-thread.it-depth-4 { margin-left: -13px; margin-right: -10px; }
 .it-head { display: flex; align-items: center; gap: 5px; width: 100%; background: none; border: none; padding: 2px 0; color: var(--text-strong); font-size: calc(12.5px * var(--z, 1)); text-align: left; cursor: pointer; }

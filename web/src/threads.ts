@@ -169,6 +169,28 @@ export function flattenQA(msgs: ChatMsg[]): string {
   return lines.join("\n");
 }
 
+/**
+ * 追问轮次编号：每个顶层追问块是一个独立的"地方"，块内（含所有嵌套层）
+ * 按文档序从 1 开始连续编号；主回答上另一个位置的追问块各自重新从 1 计。
+ * 返回 pathKey(threadPath) -> 轮次。
+ */
+export function threadRoundMap(msgs: ChatMsg[]): Map<string, number> {
+  const map = new Map<string, number>();
+  const walkTree = (t: InlineThread, mp: MsgPath, counter: { n: number }) => {
+    counter.n++;
+    const tp: ThreadPath = [...mp, t.id];
+    map.set(pathKey(tp), counter.n);
+    t.messages.forEach((m, j) => {
+      const ts = [...(m.threads ?? [])].sort((a, b) => a.start - b.start);
+      for (const st of ts) walkTree(st, [...tp, j], counter);
+    });
+  };
+  msgs.forEach((m, i) => {
+    for (const t of m.threads ?? []) walkTree(t, [i], { n: 0 });
+  });
+  return map;
+}
+
 export type IndexNode =
   | { kind: "q"; path: MsgPath; text: string }
   | { kind: "mark"; path: MsgPath; markIdx: number; mark: TextMark }

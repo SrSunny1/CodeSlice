@@ -22,6 +22,7 @@ import {
   pathKey,
   removeThread,
   threadHistory,
+  threadRoundMap,
   updateMsg,
   updateThread,
 } from "./threads";
@@ -313,8 +314,11 @@ export default function WorkspaceMain({
     commitOvList(removeThread(ovListRef.current, tp));
   }
 
+  const ovRounds = useMemo(() => threadRoundMap(ovList), [ovList]);
+
   const wsThreadCtx: ThreadCtxValue = {
     messages: ovList,
+    rounds: ovRounds,
     busy: ovStreaming,
     streamingKey:
       ovStreamKey === "main" || ovStreamKey === "overview" ? null : ovStreamKey,
