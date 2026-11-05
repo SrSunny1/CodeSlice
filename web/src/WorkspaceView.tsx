@@ -8,10 +8,34 @@ import {
   streamWorkspaceChat,
 } from "./api";
 import Reader, { type ReaderHandle } from "./Reader";
-import MarkableMarkdown, { MarkRail } from "./MarkableMarkdown";
+import MarkableMarkdown, {
+  ChatIndex,
+  MarkRail,
+  ThreadCtx,
+  type ThreadCtxValue,
+} from "./MarkableMarkdown";
 import AutoTextarea from "./AutoTextarea";
+import { usePaneZoom } from "./paneZoom";
+import {
+  expandPath,
+  newThreadId,
+  pathKey,
+  removeThread,
+  threadHistory,
+  updateMsg,
+  updateThread,
+} from "./threads";
 import type { Theme } from "./theme";
-import type { ChatMsg, Session, SessionSlice, TreeNode, Workspace } from "./types";
+import type {
+  ChatMsg,
+  InlineThread,
+  MsgPath,
+  Session,
+  SessionSlice,
+  ThreadPath,
+  TreeNode,
+  Workspace,
+} from "./types";
 
 function collectFilePaths(tree: TreeNode[], out = new Set<string>()): Set<string> {
   for (const n of tree) {
@@ -50,14 +74,57 @@ export default function WorkspaceMain({
   const [loadingFile, setLoadingFile] = useState("");
   const [error, setError] = useState("");
 
-  const [ovStreaming, setOvStreaming] = useState(false);
+  // 流式请求归属："overview" 生成概览 / "main" 概览问答 / 线程 pathKey；null 表示空闲
+  const [ovStreamKey, setOvStreamKey] = useState<string | null>(null);
+  const ovStreaming = ovStreamKey !== null;
   const [ovStreamText, setOvStreamText] = useState("");
   const ovReqRef = useRef(false);
   const ovAbortRef = useRef<AbortController | null>(null);
   const ovScrollRef = useRef<HTMLDivElement>(null);
+  usePaneZoom(ovScrollRef, "zOverview");
   const [chatInput, setChatInput] = useState("");
 
   const filePaths = useMemo(() => collectFilePaths(workspace.tree), [workspace.tree]);
+
+  // 概览正文当作第 0 条 assistant 消息，和问答消息合成一个列表统一渲染/索引；
+  // 更新时再拆回 overviewMarks/overviewThreads/overviewMessages 三个字段
+  const ovList = useMemo<ChatMsg[]>(() => {
+    const head: ChatMsg[] = workspace.overview
+      ? [
+          {
+            role: "assistant",
+            content: workspace.overview,
+            marks: workspace.overviewMarks,
+            threads: workspace.overviewThreads,
+          },
+        ]
+      : [];
+    return [...head, ...workspace.overviewMessages];
+  }, [
+    workspace.overview,
+    workspace.overviewMarks,
+    workspace.overviewThreads,
+    workspace.overviewMessages,
+  ]);
+  const ovListRef = useRef(ovList);
+  ovListRef.current = ovList;
+
+  const mdComponents = useMemo<NonNullable<ThreadCtxValue["components"]>>(
+    () => ({
+      code({ children }: { children?: React.ReactNode }) {
+        const text = String(children ?? "").replace(/`/g, "").trim();
+        if (filePaths.has(text)) {
+          return (
+            <button className="file-link" onClick={() => onOpenFile(text)}>
+              {text}
+            </button>
+          );
+        }
+        return <code>{children}</code>;
+      },
+    }),
+    [filePaths, onOpenFile]
+  );
 
   const session = filePath
     ? sessions.find((s) => s.workspaceId === workspace.id && s.filePath === filePath)
@@ -127,7 +194,13 @@ export default function WorkspaceMain({
 
   async function genOverview() {
     if (ovStreaming) return;
-    setOvStreaming(true);
+    const hasAnno =
+      (wsRef.current.overviewMarks?.length ?? 0) > 0 ||
+      (wsRef.current.overviewThreads?.length ?? 0) > 0;
+    if (hasAnno && !window.confirm("重新生成会清空概览上的标注和追问，确定吗？")) return;
+    if (hasAnno)
+      commitWs({ ...wsRef.current, overviewMarks: undefined, overviewThreads: undefined });
+    setOvStreamKey("overview");
     setOvStreamText("");
     setError("");
     const ac = new AbortController();
@@ -147,9 +220,63 @@ export default function WorkspaceMain({
       if (acc) commitWs({ ...wsRef.current, overview: acc });
       if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
-      setOvStreaming(false);
+      setOvStreamKey(null);
       setOvStreamText("");
       ovAbortRef.current = null;
+    }
+  }
+
+  /** 把组合列表写回 workspace：index0 拆回 overviewMarks/overviewThreads。 */
+  function commitOvList(list: ChatMsg[]) {
+    const w = wsRef.current;
+    if (w.overview) {
+      commitWs({
+        ...w,
+        overviewMarks: list[0]?.marks,
+        overviewThreads: list[0]?.threads,
+        overviewMessages: list.slice(1),
+      });
+    } else {
+      commitWs({ ...w, overviewMessages: list });
+    }
+  }
+
+  /** 发给 /api/workspace/chat 的历史：组合列表里 index0 的概览由 overview 字段单独携带，去掉防重复。 */
+  function histForApi(hist: { role: "user" | "assistant"; content: string }[]) {
+    return wsRef.current.overview ? hist.slice(1) : hist;
+  }
+
+  /** 统一的流式问答：主对话与追问线程共用。 */
+  async function runWsStream(
+    history: { role: "user" | "assistant"; content: string }[],
+    key: string,
+    onDone: (text: string) => void
+  ) {
+    setOvStreamKey(key);
+    setOvStreamText("");
+    setError("");
+    const ac = new AbortController();
+    ovAbortRef.current = ac;
+    let acc = "";
+    try {
+      const full = await streamWorkspaceChat(
+        { root: wsRef.current.root, overview: wsRef.current.overview, messages: history },
+        (t) => {
+          acc += t;
+          setOvStreamText(acc);
+        },
+        ac.signal
+      );
+      onDone(full);
+    } catch (e) {
+      if (acc) onDone(acc);
+      if ((e as Error).name !== "AbortError") setError((e as Error).message);
+    } finally {
+      if (ovAbortRef.current === ac) {
+        setOvStreamKey(null);
+        setOvStreamText("");
+        ovAbortRef.current = null;
+      }
     }
   }
 
@@ -159,49 +286,85 @@ export default function WorkspaceMain({
     const msgs: ChatMsg[] = [...wsRef.current.overviewMessages, { role: "user", content: text }];
     commitWs({ ...wsRef.current, overviewMessages: msgs });
     setChatInput("");
-    setOvStreaming(true);
-    setOvStreamText("");
-    const ac = new AbortController();
-    ovAbortRef.current = ac;
-    let acc = "";
-    try {
-      const full = await streamWorkspaceChat(
-        { root: wsRef.current.root, overview: wsRef.current.overview, messages: msgs },
-        (t) => {
-          acc += t;
-          setOvStreamText(acc);
-        },
-        ac.signal
-      );
+    runWsStream(msgs.map(({ role, content }) => ({ role, content })), "main", (t) =>
       commitWs({
         ...wsRef.current,
-        overviewMessages: [...msgs, { role: "assistant", content: full }],
-      });
-    } catch (e) {
-      if (acc)
-        commitWs({
-          ...wsRef.current,
-          overviewMessages: [...msgs, { role: "assistant", content: acc }],
-        });
-      if ((e as Error).name !== "AbortError") setError((e as Error).message);
-    } finally {
-      setOvStreaming(false);
-      setOvStreamText("");
-      ovAbortRef.current = null;
-    }
+        overviewMessages: [...wsRef.current.overviewMessages, { role: "assistant", content: t }],
+      })
+    );
   }
 
-  const mdComponents = {
-    code({ children }: { children?: React.ReactNode }) {
-      const text = String(children ?? "").replace(/`/g, "").trim();
-      if (filePaths.has(text)) {
-        return (
-          <button className="file-link" onClick={() => onOpenFile(text)}>
-            {text}
-          </button>
-        );
-      }
-      return <code>{children}</code>;
+  function appendWsThreadMsg(tp: ThreadPath, m: ChatMsg) {
+    commitOvList(
+      updateThread(ovListRef.current, tp, (t) => ({ ...t, messages: [...t.messages, m] }))
+    );
+  }
+
+  /** 索引条/导航点右键删除：按 MsgPath 定位标注，按 ThreadPath 定位追问。 */
+  function deleteOvMark(mp: MsgPath, markIdx: number) {
+    commitOvList(
+      updateMsg(ovListRef.current, mp, (m) => {
+        const marks = m.marks?.filter((_, i) => i !== markIdx);
+        return { ...m, marks: marks?.length ? marks : undefined };
+      })
+    );
+  }
+  function deleteOvThread(tp: ThreadPath) {
+    commitOvList(removeThread(ovListRef.current, tp));
+  }
+
+  const wsThreadCtx: ThreadCtxValue = {
+    messages: ovList,
+    busy: ovStreaming,
+    streamingKey:
+      ovStreamKey === "main" || ovStreamKey === "overview" ? null : ovStreamKey,
+    streamText: ovStreamText,
+    showDetail: false,
+    components: mdComponents,
+    onMarks(mp, marks) {
+      commitOvList(updateMsg(ovListRef.current, mp, (m) => ({ ...m, marks })));
+    },
+    onAsk(mp: MsgPath, anchor, question) {
+      const t: InlineThread = {
+        id: newThreadId(),
+        start: anchor.start,
+        end: anchor.end,
+        blockEnd: anchor.blockEnd,
+        quote: anchor.quote,
+        messages: [{ role: "user", content: question }],
+        detail: "brief",
+      };
+      const next = updateMsg(ovListRef.current, mp, (m) => ({
+        ...m,
+        threads: [...(m.threads ?? []), t],
+      }));
+      commitOvList(next);
+      const tp: ThreadPath = [...mp, t.id];
+      runWsStream(histForApi(threadHistory(next, tp)), pathKey(tp), (text) =>
+        appendWsThreadMsg(tp, { role: "assistant", content: text })
+      );
+    },
+    onReply(tp, question) {
+      const next = expandPath(
+        updateThread(ovListRef.current, tp, (t) => ({
+          ...t,
+          messages: [...t.messages, { role: "user", content: question }],
+        })),
+        tp
+      );
+      commitOvList(next);
+      runWsStream(histForApi(threadHistory(next, tp)), pathKey(tp), (text) =>
+        appendWsThreadMsg(tp, { role: "assistant", content: text })
+      );
+    },
+    onPatchThread(tp, patch) {
+      commitOvList(updateThread(ovListRef.current, tp, (t) => ({ ...t, ...patch })));
+    },
+    onDeleteThread(tp) {
+      deleteOvThread(tp);
+    },
+    onAbort() {
+      ovAbortRef.current?.abort();
     },
   };
 
@@ -253,36 +416,48 @@ export default function WorkspaceMain({
           </button>
         </span>
       </div>
-      <div className="overview-body reading-font" ref={ovScrollRef}>
+      <div className="chat-body">
+        <ChatIndex
+          containerRef={ovScrollRef}
+          messages={ovList}
+          onExpand={(tp) => commitOvList(expandPath(ovListRef.current, tp))}
+          onDeleteMark={deleteOvMark}
+          onDeleteThread={deleteOvThread}
+        />
+        <div className="overview-body reading-font" ref={ovScrollRef}>
+        <ThreadCtx.Provider value={wsThreadCtx}>
         {!workspace.overview && !ovStreaming && !ovStreamText && (
           <p className="hint">正在生成概览…</p>
         )}
-        <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-          {workspace.overview ?? ""}
-        </Markdown>
-        {ovStreaming && (
+        {workspace.overview && (
+          <div className="msg assistant" data-msg-path={0}>
+            <MarkableMarkdown msg={ovList[0]} path={[0]} />
+          </div>
+        )}
+        {ovStreamKey === "overview" && (
           <Markdown remarkPlugins={[remarkGfm]}>{ovStreamText || "…"}</Markdown>
         )}
-        {workspace.overviewMessages.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            {m.role === "assistant" ? (
-              <MarkableMarkdown
-                text={m.content}
-                marks={m.marks}
-                components={mdComponents}
-                onMarksChange={(marks) => {
-                  const msgs = wsRef.current.overviewMessages.map((x, j) =>
-                    j === i ? { ...x, marks } : x
-                  );
-                  commitWs({ ...wsRef.current, overviewMessages: msgs });
-                }}
-              />
-            ) : (
-              <div className="user-text">{m.content}</div>
-            )}
+        {workspace.overviewMessages.map((m, j) => {
+          const i = j + (workspace.overview ? 1 : 0);
+          return (
+            <div key={i} className={`msg ${m.role}`} data-msg-path={i}>
+              {m.role === "assistant" ? (
+                <MarkableMarkdown msg={m} path={[i]} />
+              ) : (
+                <div className="user-text">{m.content}</div>
+              )}
+            </div>
+          );
+        })}
+        {ovStreamKey === "main" && (
+          <div className="msg assistant">
+            <Markdown remarkPlugins={[remarkGfm]}>{ovStreamText || "…"}</Markdown>
+            <span className="cursor">▍</span>
           </div>
-        ))}
-        <MarkRail containerRef={ovScrollRef} />
+        )}
+        <MarkRail containerRef={ovScrollRef} onDeleteMark={deleteOvMark} />
+        </ThreadCtx.Provider>
+        </div>
       </div>
       <div className="chat-input">
         <div className="input-row">

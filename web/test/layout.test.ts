@@ -38,6 +38,12 @@ describe("loadLayout", () => {
       sidebarPx: 280,
       sidebarCollapsed: false,
       listCollapsed: true,
+      indexOpen: false,
+      zCode: 1,
+      zSlices: 1,
+      zChat: 1,
+      zOverview: 1,
+      zSidebar: 1,
     });
   });
 

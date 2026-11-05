@@ -36,3 +36,6 @@ npm run typecheck -w web      # 前端类型检查
 - 后端只监听 `127.0.0.1`；`/api/workspace/file` 读文件必须过 `resolveInside` 做目录边界检查。
 - 进入段落不再自动请求讲解，由「✦ 生成该段讲解」按钮触发（`web/src/Reader.tsx`）。
 - AI 回答的高亮标注存 `ChatMsg.marks`（`TextMark{start,end,color,note?}`），偏移量基于渲染后 textContent；渲染用 CSS Custom Highlight API，不改 DOM，见 `web/src/MarkableMarkdown.tsx`。带备注的标注走 `cs-mark-{色}n` 高亮名并加下划线；同文件导出的 `MarkRail` 是滚动区右侧的标注导航点。浏览器不支持该 API 时标注功能自动隐藏。
+- 嵌入式追问存 `ChatMsg.threads`（`InlineThread`，start/end 与 TextMark 同一 textContent 坐标系，blockEnd 是所在块 hast position.end.offset，-1 插到消息末尾）；定位路径 `MsgPath`/`ThreadPath` 与不可变树操作在 `web/src/threads.ts`（有单测）。`MarkableMarkdown` 计算偏移时一律跳过 `.inline-thread` 内的文字，保证追问 UI 不污染坐标；宿主通过 `ThreadCtx` 注入回调，无 provider 时退化为纯渲染。概览页的追问挂在 `Workspace.overviewThreads`/`overviewMarks` 上。
+- 索引条（`ChatIndex`）与右缘导航点（`MarkRail`）支持右键删除标注/追问，宿主通过 `onDeleteMark`/`onDeleteThread` 回调落到 `updateMsg`/`removeThread`。
+- 各栏 Ctrl+滚轮独立缩放走 `web/src/paneZoom.ts` 的 `usePaneZoom`：原生非 passive wheel 监听 + 元素 `--z` 变量，相关 `font-size` 用 `calc(Npx * var(--z,1))`，系数存 `codeslice:layout` 的 `zCode/zSlices/zChat/zOverview/zSidebar`（0.7–2）。

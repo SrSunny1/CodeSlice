@@ -3,14 +3,26 @@ import { Highlight, themes } from "prism-react-renderer";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
-import MarkableMarkdown, { ChatIndex, MarkRail } from "./MarkableMarkdown";
+import MarkableMarkdown, { ChatIndex, MarkRail, ThreadCtx, type ThreadCtxValue } from "./MarkableMarkdown";
 import { postSlice, streamChat, streamSummary, type ProjectContext } from "./api";
 import { mergeSlices, splitSlice } from "./sliceOps";
 import { clampPct, loadLayout, saveLayout } from "./layout";
+import { usePaneZoom } from "./paneZoom";
 import { ThemeButton } from "./Home";
 import { loadDetail, saveDetail, type Detail } from "./detail";
+import {
+  expandPath,
+  flattenQA,
+  getThread,
+  newThreadId,
+  pathKey,
+  removeThread,
+  threadHistory,
+  updateMsg,
+  updateThread,
+} from "./threads";
 import type { Theme } from "./theme";
-import type { Session, SessionSlice } from "./types";
+import type { ChatMsg, InlineThread, MsgPath, Session, SessionSlice, ThreadPath } from "./types";
 
 const SLICE_COLORS = ["#4f8cff", "#9a6bff", "#ff9f43", "#2fbf71", "#ff5c7a", "#17becf", "#e0c341"];
 
@@ -38,7 +50,9 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   ref
 ) {
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  // 流式请求的归属："main" 主对话 / "summary" 全文总结 / 线程 pathKey；null 表示空闲
+  const [streamKey, setStreamKey] = useState<string | null>(null);
+  const streaming = streamKey !== null;
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState("");
   const [selAnchor, setSelAnchor] = useState<number | null>(null);
@@ -55,6 +69,8 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const bodyRef = useRef<HTMLDivElement>(null);
   const sideRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const codePaneRef = useRef<HTMLDivElement>(null);
+  const sliceListRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<"v" | "h" | null>(null);
   const [codePct, setCodePct] = useState(() => loadLayout().codePct);
   const [listPct, setListPct] = useState(() => loadLayout().listPct);
@@ -64,6 +80,10 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   detailRef.current = detail;
   const pctRef = useRef({ codePct, listPct });
   pctRef.current = { codePct, listPct };
+  // 各栏 Ctrl+滚轮独立缩放
+  usePaneZoom(codePaneRef, "zCode");
+  usePaneZoom(sliceListRef, "zSlices");
+  usePaneZoom(chatScrollRef, "zChat");
 
   const prismTheme = theme === "dark" ? themes.oneDark : themes.oneLight;
 
@@ -110,17 +130,38 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     commit({ ...sess, slices });
   }
 
+  /** 按 slice id 定位并整体替换 messages（提交时按当前 session 状态计算）。 */
+  function patchSliceMessages(sliceId: string, fn: (ms: ChatMsg[]) => ChatMsg[]) {
+    const sess = sessionRef.current;
+    const slices = sess.slices.map((s) =>
+      s.id === sliceId ? { ...s, messages: fn(s.messages) } : s
+    );
+    commit({ ...sess, slices });
+  }
+
+  function curSliceId(): string {
+    return sessionRef.current.currentSliceId;
+  }
+
   function understoodTitles() {
     return sessionRef.current.slices.filter((s) => s.status === "done").map((s) => s.title);
   }
 
+  /**
+   * 统一的流式问答：主对话与追问线程共用。
+   * history 是发给 /api/chat 的扁平消息；onDone 负责把回答落到正确的位置。
+   */
   async function runStream(
-    sliceIdx: number,
-    messages: SessionSlice["messages"],
-    selectionArg?: { startLine: number; endLine: number }
+    sliceId: string,
+    history: { role: "user" | "assistant"; content: string }[],
+    selectionArg: { startLine: number; endLine: number } | undefined,
+    detailArg: Detail,
+    key: string,
+    onDone: (text: string) => void
   ) {
-    const s = sessionRef.current.slices[sliceIdx];
-    setStreaming(true);
+    const s = sessionRef.current.slices.find((x) => x.id === sliceId);
+    if (!s) return;
+    setStreamKey(key);
     setStreamText("");
     setError("");
     const ac = new AbortController();
@@ -134,11 +175,11 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
           slice: s,
           slices: sessionRef.current.slices,
           understoodTitles: understoodTitles(),
-          messages,
+          messages: history,
           selection: selectionArg,
           projectContext,
           codePurpose: sessionRef.current.codePurpose,
-          detail: detailRef.current,
+          detail: detailArg,
         },
         (t) => {
           acc += t;
@@ -146,30 +187,112 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
         },
         ac.signal
       );
-      updateSlice(sliceIdx, {
-        messages: [...messages, { role: "assistant", content: full }],
-      });
+      onDone(full);
     } catch (e) {
-      if ((e as Error).name === "AbortError") {
-        if (acc)
-          updateSlice(sliceIdx, {
-            messages: [...messages, { role: "assistant", content: acc }],
-          });
-      } else {
-        if (acc)
-          updateSlice(sliceIdx, {
-            messages: [...messages, { role: "assistant", content: acc }],
-          });
-        setError((e as Error).message);
-      }
+      if (acc) onDone(acc);
+      if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
       if (abortRef.current === ac) {
-        setStreaming(false);
+        setStreamKey(null);
         setStreamText("");
         abortRef.current = null;
       }
     }
   }
+
+  /** 主对话发送（含「生成该段讲解」的空历史流式）。 */
+  function streamMain(sliceId: string, msgs: ChatMsg[], selection?: { startLine: number; endLine: number }) {
+    const history = msgs.map(({ role, content }) => ({ role, content }));
+    runStream(sliceId, history, selection, detailRef.current, "main", (text) =>
+      patchSliceMessages(sliceId, (ms) => [...ms, { role: "assistant", content: text }])
+    );
+  }
+
+  /** 把线程 tp 的回答追加到该线程 messages 末尾（提交时按当前状态重查）。 */
+  function appendThreadMsg(tp: ThreadPath, m: ChatMsg, sliceId = curSliceId()) {
+    patchSliceMessages(sliceId, (ms) =>
+      updateThread(ms, tp, (t) => ({ ...t, messages: [...t.messages, m] }))
+    );
+  }
+
+  /** 索引条/导航点右键删除：按 MsgPath 定位标注，按 ThreadPath 定位追问。 */
+  function deleteMarkAt(mp: MsgPath, markIdx: number) {
+    patchSliceMessages(curSliceId(), (ms) =>
+      updateMsg(ms, mp, (m) => {
+        const marks = m.marks?.filter((_, i) => i !== markIdx);
+        return { ...m, marks: marks?.length ? marks : undefined };
+      })
+    );
+  }
+  function deleteThreadAt(tp: ThreadPath) {
+    patchSliceMessages(curSliceId(), (ms) => removeThread(ms, tp));
+  }
+
+  const threadCtx: ThreadCtxValue = {
+    messages: cur?.messages ?? [],
+    busy: streaming,
+    streamingKey: streamKey === "main" || streamKey === "summary" ? null : streamKey,
+    streamText,
+    showDetail: true,
+    onMarks(mp, marks) {
+      patchSliceMessages(curSliceId(), (ms) => updateMsg(ms, mp, (m) => ({ ...m, marks })));
+    },
+    onAsk(mp: MsgPath, anchor, question) {
+      const sliceId = curSliceId();
+      const s = sessionRef.current.slices.find((x) => x.id === sliceId);
+      if (!s) return;
+      const t: InlineThread = {
+        id: newThreadId(),
+        start: anchor.start,
+        end: anchor.end,
+        blockEnd: anchor.blockEnd,
+        quote: anchor.quote,
+        messages: [{ role: "user", content: question }],
+        detail: "brief",
+      };
+      const next = updateMsg(s.messages, mp, (m) => ({
+        ...m,
+        threads: [...(m.threads ?? []), t],
+      }));
+      patchSliceMessages(sliceId, () => next);
+      const tp: ThreadPath = [...mp, t.id];
+      runStream(sliceId, threadHistory(next, tp), undefined, "brief", pathKey(tp), (text) =>
+        appendThreadMsg(tp, { role: "assistant", content: text }, sliceId)
+      );
+    },
+    onReply(tp, question) {
+      const sliceId = curSliceId();
+      const s = sessionRef.current.slices.find((x) => x.id === sliceId);
+      if (!s) return;
+      const next = expandPath(
+        updateThread(s.messages, tp, (t) => ({
+          ...t,
+          messages: [...t.messages, { role: "user", content: question }],
+        })),
+        tp
+      );
+      patchSliceMessages(sliceId, () => next);
+      runStream(
+        sliceId,
+        threadHistory(next, tp),
+        undefined,
+        getThread(next, tp)?.detail ?? "brief",
+        pathKey(tp),
+        (text) => appendThreadMsg(tp, { role: "assistant", content: text }, sliceId)
+      );
+    },
+    onPatchThread(tp, patch) {
+      patchSliceMessages(curSliceId(), (ms) =>
+        updateThread(ms, tp, (t) => ({ ...t, ...patch }))
+      );
+    },
+    onDeleteThread(tp) {
+      deleteThreadAt(tp);
+    },
+    onAbort() {
+      abortRef.current?.abort();
+    },
+  };
 
   // 卸载时中止进行中的流式请求（已收到的部分会由 AbortError 分支保存）。
   useEffect(() => {
@@ -213,7 +336,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     setInput("");
     setSelection(null);
     setSelAnchor(null);
-    runStream(curIdx, msgs, selection ?? undefined);
+    streamMain(cur.id, msgs, selection ?? undefined);
   }
 
   function markUnderstood() {
@@ -294,13 +417,13 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     setError("");
     const ac = new AbortController();
     abortRef.current = ac;
-    setStreaming(true);
+    setStreamKey("summary");
     let acc = "";
     const qa = sessionRef.current.slices.map((s) => ({
       title: s.title,
       startLine: s.startLine,
       endLine: s.endLine,
-      qa: s.messages.map((m) => `${m.role === "user" ? "问" : "答"}：${m.content}`).join("\n").slice(0, 1500),
+      qa: flattenQA(s.messages).slice(0, 1500),
     }));
     try {
       const full = await streamSummary(
@@ -321,7 +444,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
       if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
       if (abortRef.current === ac) {
-        setStreaming(false);
+        setStreamKey(null);
         abortRef.current = null;
       }
     }
@@ -347,7 +470,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
         </div>
       )}
       <div className="reader-body" ref={bodyRef}>
-        <div className="code-pane" style={{ width: `${codePct}%` }}>
+        <div className="code-pane" ref={codePaneRef} style={{ width: `${codePct}%` }}>
           <Highlight theme={prismTheme} code={session.code} language={session.language}>
             {({ tokens, getLineProps, getTokenProps }) => (
               <pre className="code-pre">
@@ -442,7 +565,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
             </span>
           </div>
           {!listCollapsed && (
-            <div className="slice-list" style={{ height: `${listPct}%` }}>
+            <div className="slice-list" ref={sliceListRef} style={{ height: `${listPct}%` }}>
             {session.slices.map((s, i) => (
               <div
                 key={s.id}
@@ -492,47 +615,48 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
               </span>
             </div>
             <div className="chat-body">
-              <ChatIndex containerRef={chatScrollRef} messages={cur?.messages ?? []} />
+              <ChatIndex
+                containerRef={chatScrollRef}
+                messages={cur?.messages ?? []}
+                onExpand={(tp) =>
+                  patchSliceMessages(curSliceId(), (ms) => expandPath(ms, tp))
+                }
+                onDeleteMark={deleteMarkAt}
+                onDeleteThread={deleteThreadAt}
+              />
               <div className="chat-messages" ref={chatScrollRef}>
+              <ThreadCtx.Provider value={threadCtx}>
               {cur && cur.messages.length === 0 && !streaming && (
                 <div className="chat-empty">
                   <p>这一段还没有讲解。可以先生成概览，或直接提问。</p>
-                  <button className="primary" onClick={() => runStream(curIdx, [])}>
+                  <button className="primary" onClick={() => streamMain(cur.id, [])}>
                     ✦ 生成该段讲解
                   </button>
                 </div>
               )}
               {cur?.messages.map((m, i) => (
-                <div key={i} className={`msg ${m.role}`}>
+                <div key={i} className={`msg ${m.role}`} data-msg-path={i}>
                   {m.selection && (
                     <span className="sel-tag">
                       针对第 {m.selection.startLine}–{m.selection.endLine} 行
                     </span>
                   )}
                   {m.role === "assistant" ? (
-                    <MarkableMarkdown
-                      text={m.content}
-                      marks={m.marks}
-                      onMarksChange={(marks) => {
-                        const msgs = sessionRef.current.slices[curIdx].messages.map((x, j) =>
-                          j === i ? { ...x, marks } : x
-                        );
-                        updateSlice(curIdx, { messages: msgs });
-                      }}
-                    />
+                    <MarkableMarkdown msg={m} path={[i]} />
                   ) : (
                     <div className="user-text">{m.content}</div>
                   )}
                 </div>
               ))}
-              {streaming && (
+              {streamKey === "main" && (
                 <div className="msg assistant">
                   <Markdown remarkPlugins={[remarkGfm]}>{streamText || "…"}</Markdown>
                   <span className="cursor">▍</span>
                 </div>
               )}
-              <MarkRail containerRef={chatScrollRef} />
+              <MarkRail containerRef={chatScrollRef} onDeleteMark={deleteMarkAt} />
               <div ref={chatEndRef} />
+              </ThreadCtx.Provider>
               </div>
             </div>
             {error && <div className="error-box">{error}</div>}

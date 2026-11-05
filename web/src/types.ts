@@ -1,3 +1,5 @@
+import type { Detail } from "./detail";
+
 export interface Slice {
   id: string;
   startLine: number;
@@ -19,12 +21,34 @@ export interface TextMark {
   note?: string;
 }
 
+/** 嵌在回答正文里的追问线程：锚定到父消息 textContent 的一段文字，插在所在块之后渲染。 */
+export interface InlineThread {
+  id: string;
+  /** 锚定文字在父消息 textContent 里的起止偏移（与 TextMark 同一坐标系） */
+  start: number;
+  end: number;
+  /** 所在块 hast position.end.offset；-1 或锚块未渲染时插在消息末尾 */
+  blockEnd: number;
+  /** 选中文字快照（折叠空白，最多 500 字） */
+  quote: string;
+  messages: ChatMsg[];
+  collapsed?: boolean;
+  /** 追问回答的详细程度，默认 brief */
+  detail?: Detail;
+}
+
 export interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   selection?: { startLine: number; endLine: number };
   marks?: TextMark[];
+  threads?: InlineThread[];
 }
+
+/** [msgIdx, threadId, msgIdx, …]（奇数长度）：定位某条消息，可穿越任意层追问。 */
+export type MsgPath = (number | string)[];
+/** [msgIdx, threadId, …, msgIdx, threadId]（偶数长度）：定位某个追问线程。 */
+export type ThreadPath = (number | string)[];
 
 export interface SessionSlice extends Slice {
   status: SliceStatus;
@@ -59,6 +83,8 @@ export interface Workspace {
   tree: TreeNode[];
   truncated: boolean;
   overview?: string;
+  overviewMarks?: TextMark[];
+  overviewThreads?: InlineThread[];
   overviewMessages: ChatMsg[];
   createdAt: number;
   lastFilePath?: string;

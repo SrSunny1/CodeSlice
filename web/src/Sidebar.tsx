@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { loadSidebarState, saveSidebarState } from "./store";
+import { usePaneZoom } from "./paneZoom";
 import { ThemeButton } from "./Home";
 import type { Theme } from "./theme";
 import type { Session, TreeNode, Workspace } from "./types";
@@ -42,6 +43,8 @@ export function Sidebar({
   onCollapse: () => void;
 }) {
   const [sb, setSb] = useState(loadSidebarState);
+  const sbRef = useRef<HTMLElement>(null);
+  usePaneZoom(sbRef, "zSidebar");
 
   function updateSb(next: typeof sb) {
     setSb(next);
@@ -107,7 +110,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" ref={sbRef}>
       <div className="sb-head">
         <span className="sb-brand">CodeSlice</span>
         <button className="sb-icon-btn" title="收起侧栏（Ctrl+B）" onClick={onCollapse}>
