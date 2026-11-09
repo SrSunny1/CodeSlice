@@ -858,7 +858,7 @@ export function revealRange(
 ) {
   const rc = range.getClientRects()[0];
   if (!rc) return;
-  const ratio = opts?.ratio ?? 0.5;
+  const ratio = opts?.ratio ?? 0.12; // 默认靠顶部 ~12% 处，不再居中
   const cRect = scroller.getBoundingClientRect();
   const top = rc.top - cRect.top + scroller.scrollTop;
   scroller.scrollTo({
@@ -976,11 +976,11 @@ export function MarkRail({
 
 // ---------------- 问答 + 标注 + 追问索引（聊天区左缘，可展开成树面板） ----------------
 
-function scrollElCenter(scroller: HTMLElement, el: Element) {
+function scrollElTop(scroller: HTMLElement, el: Element) {
   const rc = el.getBoundingClientRect();
   const cRect = scroller.getBoundingClientRect();
   scroller.scrollTo({
-    top: rc.top - cRect.top + scroller.scrollTop + rc.height / 2 - scroller.clientHeight / 2,
+    top: rc.top - cRect.top + scroller.scrollTop - scroller.clientHeight * 0.12,
     behavior: "smooth",
   });
 }
@@ -1213,7 +1213,7 @@ export function ChatIndex({
           ? `[data-msg-path="${pathKey(n.path)}"]`
           : `[data-thread-path="${pathKey(n.path)}"]`;
       const el = c2.querySelector(sel);
-      if (el) scrollElCenter(c2, el);
+      if (el) scrollElTop(c2, el);
     };
     if (need) {
       onExpand(need);
