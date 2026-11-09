@@ -1085,6 +1085,11 @@ export function ChatIndex({
   onDeleteThread: (tp: ThreadPath) => void;
 }) {
   const [open, setOpen] = useState(() => loadLayout().indexOpen);
+  const [width, setWidth] = useState(() => loadLayout().indexPx);
+  const [dragging, setDragging] = useState(false);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  const idxRef = useRef<HTMLDivElement>(null);
   const [treeClosed, setTreeClosed] = useState<ReadonlySet<string>>(new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; node: IndexNode } | null>(
     null
@@ -1154,6 +1159,26 @@ export function ChatIndex({
     };
   }, [menu]);
 
+  // 右缘拖拽调宽（展开态），松手后持久化
+  function onResizeDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragging(true);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging", "drag-v");
+  }
+  function onResizeMove(e: React.PointerEvent<HTMLDivElement>) {
+    const el = idxRef.current;
+    if (!dragging || !el) return;
+    const w = e.clientX - el.getBoundingClientRect().left;
+    setWidth(Math.min(420, Math.max(140, w)));
+  }
+  function onResizeUp() {
+    if (!dragging) return;
+    setDragging(false);
+    document.body.classList.remove("dragging", "drag-v");
+    saveLayout({ indexPx: widthRef.current });
+  }
+
   function toggleTree(key: string) {
     setTreeClosed((prev) => {
       const n = new Set(prev);
@@ -1209,7 +1234,11 @@ export function ChatIndex({
   if (!tree.length) return null;
 
   return (
-    <div className={`chat-index${open ? " open" : ""}`}>
+    <div
+      ref={idxRef}
+      className={`chat-index${open ? " open" : ""}${dragging ? " resizing" : ""}`}
+      style={open ? { width } : undefined}
+    >
       <button
         className="ci-toggle"
         title={open ? "收起索引" : "展开索引"}
@@ -1256,6 +1285,15 @@ export function ChatIndex({
             </button>
           ))}
         </div>
+      )}
+      {open && (
+        <div
+          className="ci-resizer"
+          title="拖拽调整索引宽度"
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeUp}
+        />
       )}
       {menu &&
         createPortal(

@@ -136,7 +136,13 @@ export function streamOverview(
 }
 
 export function streamWorkspaceChat(
-  args: { root: string; overview?: string; messages: ChatMsg[] },
+  args: {
+    root: string;
+    overview?: string;
+    /** 传了就进入"单文档问答"模式（如 summary md），忽略 overview/文件树 */
+    doc?: { title: string; content: string };
+    messages: ChatMsg[];
+  },
   onDelta: (t: string) => void,
   signal?: AbortSignal
 ): Promise<string> {

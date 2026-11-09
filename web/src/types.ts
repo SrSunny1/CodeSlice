@@ -80,6 +80,13 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
+/** 文件预览（FileView）上挂载的标注/追问/问答状态，按相对路径存。 */
+export interface FileViewState {
+  marks?: TextMark[];
+  threads?: InlineThread[];
+  messages: ChatMsg[];
+}
+
 export interface Workspace {
   id: string;
   root: string;
@@ -90,6 +97,8 @@ export interface Workspace {
   overviewMarks?: TextMark[];
   overviewThreads?: InlineThread[];
   overviewMessages: ChatMsg[];
+  /** 文件预览（含 summary/*.md）的标注/追问/问答，key=filePath */
+  fileViews?: Record<string, FileViewState>;
   createdAt: number;
   lastFilePath?: string;
 }

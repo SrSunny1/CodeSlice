@@ -39,6 +39,7 @@ describe("loadLayout", () => {
       sidebarCollapsed: false,
       listCollapsed: true,
       indexOpen: false,
+      indexPx: 220,
       zCode: 1,
       zSlices: 1,
       zChat: 1,

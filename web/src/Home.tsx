@@ -206,7 +206,7 @@ export default function NewPage({
             <span className="recent-count">{workspaces.length} 个</span>
           </div>
           <div className="recent-grid">
-            {workspaces.map((w) => {
+            {[...workspaces].sort((a, b) => b.createdAt - a.createdAt).map((w) => {
               const doneSessions = sessions.filter((s) => s.workspaceId === w.id);
               const allDone = doneSessions.filter(
                 (s) => s.slices.every((x) => x.status === "done")

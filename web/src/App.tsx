@@ -105,7 +105,7 @@ export default function App() {
         out[i] = next;
         return out;
       }
-      return [next, ...all];
+      return [...all, next];
     });
   }, []);
 

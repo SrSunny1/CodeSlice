@@ -355,9 +355,27 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.currentSliceId]);
 
+  // 滚动跟随：追问流式跟随该追问卡片（实时看到输出）；主问答流式即时跟底；
+  // 追问流刚结束保持原位不回跳底部，让用户停在追问处。
+  const prevStreamKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [cur?.messages.length, streamText]);
+    const threadKey =
+      streamKey && streamKey !== "main" && streamKey !== "summary" && streamKey !== "sliceqa"
+        ? streamKey
+        : null;
+    if (threadKey) {
+      chatScrollRef.current
+        ?.querySelector(`[data-thread-path="${threadKey}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    } else if (
+      streamKey === "main" ||
+      (!streamKey &&
+        (prevStreamKeyRef.current === null || prevStreamKeyRef.current === "main"))
+    ) {
+      chatEndRef.current?.scrollIntoView({ behavior: streamKey ? "auto" : "smooth" });
+    }
+    prevStreamKeyRef.current = streamKey;
+  }, [cur?.messages.length, streamText, streamKey]);
 
   function gotoSlice(s: SessionSlice) {
     if (streaming) return;

@@ -27,7 +27,8 @@ export function deleteSession(id: string): void {
 export function loadWorkspaces(): Workspace[] {
   try {
     const v = JSON.parse(localStorage.getItem(WS_KEY) ?? "[]");
-    return Array.isArray(v) ? v : [];
+    // 统一按导入时间升序：先导入在前，后导入在后
+    return Array.isArray(v) ? [...v].sort((a, b) => a.createdAt - b.createdAt) : [];
   } catch {
     return [];
   }
@@ -37,7 +38,7 @@ export function saveWorkspace(ws: Workspace): void {
   const all = loadWorkspaces();
   const i = all.findIndex((w) => w.id === ws.id);
   if (i >= 0) all[i] = ws;
-  else all.unshift(ws);
+  else all.push(ws);
   localStorage.setItem(WS_KEY, JSON.stringify(all));
 }
 

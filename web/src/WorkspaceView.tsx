@@ -31,6 +31,7 @@ import {
 import type { Theme } from "./theme";
 import type {
   ChatMsg,
+  FileViewState,
   InlineThread,
   MsgPath,
   Session,
@@ -138,6 +139,14 @@ export default function WorkspaceMain({
   function commitWs(next: Workspace) {
     wsRef.current = next;
     onWorkspaceChange(next);
+  }
+
+  /** 文件预览上的标注/追问/问答：合并进 workspace.fileViews[filePath] 并持久化。 */
+  function commitFileView(path: string, patch: Partial<FileViewState>) {
+    const w = wsRef.current;
+    const views = { ...(w.fileViews ?? {}) };
+    views[path] = { ...(views[path] ?? { messages: [] }), ...patch };
+    commitWs({ ...w, fileViews: views });
   }
 
   // 进入项目概览时自动生成（防 StrictMode 重复）
@@ -328,6 +337,27 @@ export default function WorkspaceMain({
 
   const ovRounds = useMemo(() => threadRoundMap(ovList), [ovList]);
 
+  // 滚动跟随：追问流式跟随该追问卡片；概览/主问答流式跟底；流结束保持原位。
+  const prevOvKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const sc = ovScrollRef.current;
+    const k = ovStreamKey;
+    if (!sc) return;
+    const threadKey = k && k !== "main" && k !== "overview" ? k : null;
+    if (threadKey) {
+      sc.querySelector(`[data-thread-path="${threadKey}"]`)?.scrollIntoView({
+        block: "nearest",
+      });
+    } else if (
+      k === "main" ||
+      k === "overview" ||
+      (!k && (prevOvKeyRef.current === "main" || prevOvKeyRef.current === "overview"))
+    ) {
+      sc.scrollTop = sc.scrollHeight;
+    }
+    prevOvKeyRef.current = k;
+  }, [ovList.length, ovStreamText, ovStreamKey]);
+
   const wsThreadCtx: ThreadCtxValue = {
     messages: ovList,
     rounds: ovRounds,
@@ -392,6 +422,8 @@ export default function WorkspaceMain({
         <FileView
           root={workspace.root}
           filePath={filePath}
+          view={workspace.fileViews?.[filePath]}
+          onViewChange={(patch) => commitFileView(filePath, patch)}
           onSlice={() => onOpenFile(filePath, "slice")}
           onOpenFile={(p) => onOpenFile(p, "view")}
         />

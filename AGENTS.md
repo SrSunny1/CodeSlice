@@ -33,7 +33,7 @@ npm run typecheck -w web      # 前端类型检查
 - 前端合并/拆分纯函数在 `web/src/sliceOps.ts`（有单测）。
 - 会话持久化在浏览器 localStorage，键 `codeslice:sessions`；另有 `codeslice:workspaces`、`codeslice:layout`、`codeslice:sidebar`、`codeslice:route`、`codeslice:theme`、`codeslice:detail`、`codeslice:summaryDir`（粘贴代码会话的总结保存目录）。
 - 每段总结：`POST /api/slice-qa` 逐段单独生成（入参只含本段带行号代码 `code` + 本段 `qaDigestText` 明细，二者至少一个非空）；`POST /api/summary/export` 把 `{name, content}[]` 写入 `<base>/summary/<sub>/`，`sub` 为会话 `filePath`（如 `code.py` → `summary/code.py/01-段名.md` + `README.md`），无 filePath 用会话标题；sub 每级与文件名都经 `sanitizeFilename` 消毒并剔除 `..`。工作区会话 `summaryBaseDir`=项目根，粘贴代码会话首次用 FolderPicker 选目录。结果缓存在 `SessionSlice.qaSummary`。
-- 工作区文件左键点击 = 普通打开（`FileView` 预览，不调 AI）；右击文件弹「切分阅读」→ `Route.fileMode:"slice"` 才走读文件+切分流程（已有会话直接进 Reader）。`fileMode` 缺省的旧路由按有无会话推断。`.md` 文件默认渲染预览（可切源码），相对图片走 `GET /api/workspace/asset?root&path`（resolveInside 限界、≤20MB），相对 md 链接可点击跳转。
+- 工作区文件左键点击 = 普通打开（`FileView` 预览，不调 AI）；右击文件弹「切分阅读」→ `Route.fileMode:"slice"` 才走读文件+切分流程（已有会话直接进 Reader）。`fileMode` 缺省的旧路由按有无会话推断。`.md` 文件默认渲染预览（可切源码），相对图片走 `GET /api/workspace/asset?root&path`（resolveInside 限界、≤20MB），相对 md 链接可点击跳转。md 预览经 `MarkableMarkdown`+`ThreadCtx` 提供标注/追问/索引条/导航点，底部有文档问答 composer；状态按 `filePath` 存 `Workspace.fileViews`（同概览页 head-msg 拆分模式），问答走 `/api/workspace/chat` 的 `doc:{title,content}` 模式（不带文件树）。
 - 项目跑在 WSL + Windows 盘（/mnt/e）时，Vite 用 `web/vite.config.ts` 里的 `watch.usePolling`、后端 `tsx watch` 用 `CHOKIDAR_USEPOLLING=1` 才能收到文件变更。
 - 后端只监听 `127.0.0.1`；`/api/workspace/file` 读文件必须过 `resolveInside` 做目录边界检查。
 - 进入段落不再自动请求讲解，由「✦ 生成该段讲解」按钮触发（`web/src/Reader.tsx`）。

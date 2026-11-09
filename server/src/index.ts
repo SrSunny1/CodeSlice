@@ -597,7 +597,7 @@ app.post("/api/workspace/overview", async (req, res) => {
 });
 
 app.post("/api/workspace/chat", async (req, res) => {
-  const { root, overview, messages } = req.body ?? {};
+  const { root, overview, messages, doc } = req.body ?? {};
   if (typeof root !== "string" || !Array.isArray(messages)) {
     return res.status(400).json({ error: "缺少 root 或 messages 参数。" });
   }
@@ -612,22 +612,35 @@ app.post("/api/workspace/chat", async (req, res) => {
     return res.end();
   }
 
-  let treeText = "";
-  try {
-    treeText = "文件树：\n" + treeToText(listTree(root).tree).slice(0, 400).join("\n");
-  } catch {
-    treeText = "（文件树不可用）";
+  // doc={title,content}：围绕单篇文档（如 summary/*.md）的问答，不带项目树
+  const docObj = doc && typeof doc === "object" ? doc : null;
+  let system: string;
+  if (docObj) {
+    const dt = typeof docObj.title === "string" ? docObj.title.slice(0, 120) : "文档";
+    const dc = typeof docObj.content === "string" ? docObj.content.slice(0, 12000) : "";
+    system =
+      "你是耐心的编程老师，面向编程新手，用简体中文回答关于以下文档的问题。" +
+      "每次只回答用户当前这个问题，简洁，只依据文档内容与问答上下文。\n\n" +
+      `文档「${dt}」内容：\n${dc}`;
+  } else {
+    let treeText = "";
+    try {
+      treeText = "文件树：\n" + treeToText(listTree(root).tree).slice(0, 400).join("\n");
+    } catch {
+      treeText = "（文件树不可用）";
+    }
+    system =
+      "你是耐心的编程老师，面向编程新手，用简体中文回答关于这个项目的整体问题。" +
+      "每次只回答用户当前这个问题，简洁。\n\n" +
+      treeText +
+      (typeof overview === "string" && overview ? `\n\n项目概览：\n${overview.slice(0, 8000)}` : "");
   }
 
   const history = messages as { role: string; content: string }[];
   const chatMsgs: ChatMessage[] = [
     {
       role: "system",
-      content:
-        "你是耐心的编程老师，面向编程新手，用简体中文回答关于这个项目的整体问题。" +
-        "每次只回答用户当前这个问题，简洁。\n\n" +
-        treeText +
-        (typeof overview === "string" && overview ? `\n\n项目概览：\n${overview.slice(0, 8000)}` : ""),
+      content: system,
     },
     ...history
       .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")

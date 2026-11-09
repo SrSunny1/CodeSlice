@@ -7,6 +7,8 @@ export interface LayoutPct {
   sidebarCollapsed: boolean;
   listCollapsed: boolean;
   indexOpen: boolean;
+  /** 索引条展开宽度（px） */
+  indexPx: number;
   /** 各栏 Ctrl+滚轮文字缩放系数 */
   zCode: number;
   zSlices: number;
@@ -45,6 +47,7 @@ export function loadLayout(): LayoutPct {
         typeof v.sidebarCollapsed === "boolean" ? v.sidebarCollapsed : false,
       listCollapsed: typeof v.listCollapsed === "boolean" ? v.listCollapsed : true,
       indexOpen: typeof v.indexOpen === "boolean" ? v.indexOpen : false,
+      indexPx: clampNum(v.indexPx, 140, 420, 220),
       zCode: clampNum(v.zCode, 0.7, 2, 1),
       zSlices: clampNum(v.zSlices, 0.7, 2, 1),
       zChat: clampNum(v.zChat, 0.7, 2, 1),
@@ -59,6 +62,7 @@ export function loadLayout(): LayoutPct {
       sidebarCollapsed: false,
       listCollapsed: true,
       indexOpen: false,
+      indexPx: 220,
       zCode: 1,
       zSlices: 1,
       zChat: 1,
