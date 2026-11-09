@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import NewPage from "./Home";
+import NewPage, { ThemeButton } from "./Home";
 import Reader, { type ReaderHandle } from "./Reader";
 import WorkspaceMain from "./WorkspaceView";
 import { Sidebar, type Route } from "./Sidebar";
+import { IconCode, IconFolder, IconRefresh } from "./icons";
 import type { Session, TreeNode, Workspace } from "./types";
 import {
   deleteSession,
@@ -184,22 +185,58 @@ export default function App() {
     route.kind === "workspace"
       ? workspaces.find((w) => w.id === route.workspaceId)
       : undefined;
+  const activeSession =
+    route.kind === "snippet"
+      ? curSession
+      : route.kind === "workspace" && route.filePath && curWorkspace
+        ? sessions.find(
+            (s) => s.workspaceId === curWorkspace.id && s.filePath === route.filePath
+          )
+        : undefined;
 
-  let breadcrumb = "新建";
+  let breadcrumbNode: React.ReactNode = <span className="reader-title">开始阅读</span>;
   let main: React.ReactNode = (
     <NewPage
       onOpen={(s) => {
         updateSession(s);
-        setRoute({ kind: "snippet", sessionId: s.id });
+        if (s.workspaceId && s.filePath && workspaces.some((w) => w.id === s.workspaceId)) {
+          setRoute({
+            kind: "workspace",
+            workspaceId: s.workspaceId,
+            filePath: s.filePath,
+            fileMode: "slice",
+          });
+        } else {
+          setRoute({ kind: "snippet", sessionId: s.id });
+        }
+      }}
+      onSelectWorkspace={(w) => {
+        const hasSess =
+          w.lastFilePath &&
+          sessions.some((s) => s.workspaceId === w.id && s.filePath === w.lastFilePath);
+        setRoute({
+          kind: "workspace",
+          workspaceId: w.id,
+          filePath: w.lastFilePath,
+          fileMode: hasSess ? "slice" : w.lastFilePath ? "view" : undefined,
+        });
       }}
       onOpenWorkspace={openOrCreateWorkspace}
       workspaces={workspaces}
+      sessions={sessions}
     />
   );
   let showReslice = false;
 
   if (route.kind === "snippet" && curSession) {
-    breadcrumb = curSession.title;
+    breadcrumbNode = (
+      <div className="crumb-bar">
+        <span className="crumb-icon">
+          <IconCode size={14} />
+        </span>
+        <span className="reader-title">{curSession.title}</span>
+      </div>
+    );
     showReslice = true;
     main = (
       <Reader
@@ -215,20 +252,39 @@ export default function App() {
       />
     );
   } else if (route.kind === "workspace" && curWorkspace) {
-    breadcrumb = route.filePath
-      ? `${curWorkspace.name} / ${route.filePath}`
-      : `${curWorkspace.name} / 项目概览`;
-    showReslice = !!route.filePath;
+    breadcrumbNode = (
+      <div className="crumb-bar">
+        <button
+          className="crumb-ws-btn"
+          title="查看项目概览"
+          onClick={() => setRoute({ kind: "workspace", workspaceId: curWorkspace.id })}
+        >
+          <IconFolder size={14} />
+          <span>{curWorkspace.name}</span>
+        </button>
+        <span className="crumb-sep">/</span>
+        <span className="reader-title">
+          {route.filePath ? route.filePath : "项目概览"}
+        </span>
+      </div>
+    );
+    showReslice = !!route.filePath && !!activeSession;
     main = (
       <WorkspaceMain
         key={curWorkspace.id}
         workspace={curWorkspace}
         filePath={route.filePath}
+        fileMode={route.fileMode}
         sessions={sessions}
         onWorkspaceChange={updateWorkspace}
         onSessionChange={updateSession}
-        onOpenFile={(p) =>
-          setRoute({ kind: "workspace", workspaceId: curWorkspace.id, filePath: p || undefined })
+        onOpenFile={(p, mode) =>
+          setRoute({
+            kind: "workspace",
+            workspaceId: curWorkspace.id,
+            filePath: p || undefined,
+            fileMode: p ? (mode ?? "view") : undefined,
+          })
         }
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -237,6 +293,11 @@ export default function App() {
       />
     );
   }
+
+  const doneCount = activeSession
+    ? activeSession.slices.filter((s) => s.status === "done").length
+    : 0;
+  const totalSlices = activeSession?.slices.length ?? 0;
 
   return (
     <div className="app-shell" ref={bodyRef}>
@@ -281,12 +342,30 @@ export default function App() {
               <ExpandIcon />
             </button>
           )}
-          <span className="reader-title">{breadcrumb}</span>
+          <div className="reader-title-wrap">{breadcrumbNode}</div>
+          {activeSession && (
+            <div className="header-badges">
+              <span className="reader-chip">{activeSession.language}</span>
+              <span
+                className={`reader-progress-pill${doneCount === totalSlices && totalSlices > 0 ? " all-done" : ""}`}
+                title="已读懂段落数 / 总段落数"
+              >
+                {doneCount === totalSlices && totalSlices > 0 ? "✓ 全部已懂" : `${doneCount} / ${totalSlices} 已懂`}
+              </span>
+            </div>
+          )}
           {showReslice && (
-            <button className="link" disabled={reslicing} onClick={() => readerRef.current?.reslice()}>
-              {reslicing ? "正在切分…" : "重新让 AI 切分"}
+            <button
+              className="header-action-btn"
+              disabled={reslicing}
+              title="重新让 AI 切分当前代码（会清空对话记录）"
+              onClick={() => readerRef.current?.reslice()}
+            >
+              <IconRefresh size={13} />
+              <span>{reslicing ? "正在切分…" : "重新切分"}</span>
             </button>
           )}
+          {sidebarCollapsed && <ThemeButton theme={theme} onToggle={toggleTheme} />}
         </header>
         <div className="main-content">{main}</div>
       </div>

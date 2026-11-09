@@ -150,7 +150,7 @@ function textNodes(root: Node): Text[] {
   const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
       if (n instanceof Element)
-        return n.classList.contains("inline-thread")
+        return n.classList.contains("inline-thread") || n.classList.contains("copy-code-btn")
           ? NodeFilter.FILTER_REJECT
           : NodeFilter.FILTER_SKIP;
       return NodeFilter.FILTER_ACCEPT;
@@ -291,10 +291,58 @@ function makeBlockComp(tag: string, inside: boolean) {
   };
 }
 
+/* 代码块带复制按钮：包裹原生 pre，点击把代码文本写入剪贴板。 */
+function PreWithCopy({ node, children, ...rest }: BlockProps) {
+  const bc = useContext(BlockCtx);
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  const off = node?.position?.end?.offset;
+  const list = off != null ? bc?.byBlock.get(off) : undefined;
+  const kids =
+    bc && list?.length
+      ? list.map((t) => <InlineThreadBlock key={t.id} t={t} tp={[...bc.path, t.id]} />)
+      : null;
+
+  function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    const text = preRef.current?.textContent ?? "";
+    if (!text) return;
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        /* 剪贴板不可用时静默忽略 */
+      });
+  }
+
+  return (
+    <>
+      <div className="code-copy-wrap" data-src-end={off}>
+        <pre ref={preRef} {...rest}>
+          {children}
+        </pre>
+        <button
+          type="button"
+          className={`copy-code-btn${copied ? " copied" : ""}`}
+          onClick={handleCopy}
+          title="复制代码"
+          aria-label="复制代码"
+        >
+          {copied ? "✓ 已复制" : "复制"}
+        </button>
+      </div>
+      {kids}
+    </>
+  );
+}
+
 const BLOCK_COMPONENTS: Record<string, (p: BlockProps) => React.ReactNode> = {
   p: makeBlockComp("p", false),
   li: makeBlockComp("li", true),
-  pre: makeBlockComp("pre", false),
+  pre: PreWithCopy,
   blockquote: makeBlockComp("blockquote", false),
   table: makeBlockComp("table", false),
   h1: makeBlockComp("h1", false),
@@ -641,7 +689,7 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
     } else if (pal?.range) {
       const { start, end } = pal.range;
       const next = cur.filter((m) => !overlaps(m, start, end));
-      next.push({ start, end, color });
+      next.push({ start, end, color, excerpt: pal.range.quote ? trunc(pal.range.quote, 120) : undefined });
       next.sort((a, b) => a.start - b.start);
       emit(next);
     }
@@ -668,7 +716,7 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
     // 选区写备注：先落成黄色底标（备注颜色可再改），再就地编辑
     const { start, end } = pal.range;
     const next = cur.filter((m) => !overlaps(m, start, end));
-    next.push({ start, end, color: "y" });
+    next.push({ start, end, color: "y", excerpt: pal.range.quote ? trunc(pal.range.quote, 120) : undefined });
     next.sort((a, b) => a.start - b.start);
     const idx = next.findIndex((m) => m.start === start && m.end === end);
     ctx?.onMarks(path, next);

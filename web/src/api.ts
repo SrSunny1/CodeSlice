@@ -143,6 +143,41 @@ export function streamWorkspaceChat(
   return streamPost("/api/workspace/chat", args, onDelta, signal);
 }
 
+/** markdown 预览里的相对资源（图片等）→ 服务端 /api/workspace/asset 地址。 */
+export function workspaceAssetUrl(root: string, path: string): string {
+  return `/api/workspace/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
+}
+
+/** 生成某一段的总结：只带本段代码（带行号）与本段问题/追问/标注明细。 */
+export function streamSliceQA(
+  args: {
+    language: string;
+    slice: { title: string; startLine: number; endLine: number; role?: string };
+    codePurpose?: string;
+    code: string;
+    digest: string;
+  },
+  onDelta: (t: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  return streamPost("/api/slice-qa", args, onDelta, signal);
+}
+
+/** 把若干 md 文件写入 <base>/summary/<sub>/ 目录，返回实际写入的文件名与目录。 */
+export async function exportSummaryFiles(
+  base: string,
+  sub: string,
+  files: { name: string; content: string }[]
+): Promise<{ dir: string; written: string[] }> {
+  const res = await fetch("/api/summary/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base, sub, files }),
+  });
+  await checkErr(res);
+  return (await res.json()) as { dir: string; written: string[] };
+}
+
 export function streamSummary(
   args: {
     code: string;

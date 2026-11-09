@@ -133,19 +133,23 @@ export function threadHistory(msgs: ChatMsg[], tp: ThreadPath): HistMsg[] {
   return threadHist(msgs, tp, Infinity);
 }
 
-/** 全树统计：所有层级的用户提问数与标注数。 */
-export function countTree(msgs: ChatMsg[]): { questions: number; marks: number } {
+/** 全树统计：所有层级的用户提问数、标注数与追问线程数。 */
+export function countTree(msgs: ChatMsg[]): { questions: number; marks: number; threads: number } {
   let questions = 0;
   let marks = 0;
+  let threads = 0;
   const walk = (list: ChatMsg[]) => {
     for (const m of list) {
       if (m.role === "user") questions++;
       marks += m.marks?.length ?? 0;
-      for (const t of m.threads ?? []) walk(t.messages);
+      for (const t of m.threads ?? []) {
+        threads++;
+        walk(t.messages);
+      }
     }
   };
   walk(msgs);
-  return { questions, marks };
+  return { questions, marks, threads };
 }
 
 function trunc(s: string, n: number): string {
@@ -166,6 +170,40 @@ export function flattenQA(msgs: ChatMsg[]): string {
     });
   };
   walk(msgs, 0);
+  return lines.join("\n");
+}
+
+const MARK_GLYPH: Record<string, string> = { y: "🟨", g: "🟩", b: "🟦", p: "🟪" };
+
+/**
+ * 本段问答明细文本：按文档序列出问题、回答（截断）、追问（带引用）与标注
+ * （备注优先，其次摘录）。供「问答总结」面板展示与发给 /api/slice-qa。
+ */
+export function qaDigestText(msgs: ChatMsg[]): string {
+  const lines: string[] = [];
+  let plainMarks = 0;
+  const walk = (list: ChatMsg[], depth: number, quote?: string) => {
+    const ind = "  ".repeat(depth);
+    list.forEach((m, i) => {
+      const head = i === 0 && quote ? `[追问「${trunc(quote, 30)}」] ` : "";
+      if (m.role === "user") {
+        lines.push(`${ind}${head}问：${m.content}`);
+      } else {
+        lines.push(`${ind}${head}答：${trunc(m.content, 500)}`);
+      }
+      for (const mk of m.marks ?? []) {
+        const label = mk.note || mk.excerpt;
+        if (label) {
+          lines.push(`${ind}  └ 标注${MARK_GLYPH[mk.color] ?? ""}：${trunc(label, 120)}`);
+        } else {
+          plainMarks++;
+        }
+      }
+      for (const t of m.threads ?? []) walk(t.messages, depth + 1, t.quote);
+    });
+  };
+  walk(msgs, 0);
+  if (plainMarks > 0) lines.push(`（另有 ${plainMarks} 条纯色标注未附文字）`);
   return lines.join("\n");
 }
 

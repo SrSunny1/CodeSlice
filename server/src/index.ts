@@ -9,6 +9,7 @@ import {
   collectOverviewContext,
   listTree,
   readProjectFile,
+  resolveInside,
   toLocalPath,
   treeToText,
 } from "./workspace.js";
@@ -57,6 +58,16 @@ function sliceCode(code: string, s: Slice): string {
     .slice(s.startLine - 1, s.endLine)
     .map((l, i) => `${s.startLine + i}: ${l}`)
     .join("\n");
+}
+
+/** 总结文件名消毒：去掉路径分隔与非法字符，防目录逃逸。 */
+function sanitizeFilename(name: string): string {
+  return path
+    .basename(name)
+    .replace(/[\\\/:*?"<>|\x00-\x1f]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
 }
 
 interface ProjectContext {
@@ -335,6 +346,113 @@ app.post("/api/summary", async (req, res) => {
   }
 });
 
+const MOCK_QA_SUMMARY = `# 本段问答总结（MOCK 示例）
+
+**这段代码**：示例片段，负责准备输入、处理并输出结果。
+
+## 主要问答要点
+
+1. **核心流程**：先初始化数据，再逐步处理，最后返回结果；新手常见卡点是下标从 0 开始。
+2. **边界情况**：注意空输入与越界访问，循环条件要留余量。
+3. **追问沉淀**：对「为什么这样写」的追问确认了该写法是为复用与可读性服务。
+
+## 标注提醒
+
+- 黄色标注处是关键变量，改动前先确认作用域。
+
+## 待解决
+
+- 暂无遗留疑问（MOCK 模式不产生真实问答）。`;
+
+// ---------- POST /api/slice-qa ----------
+app.post("/api/slice-qa", async (req, res) => {
+  const { language, slice, codePurpose, digest, code } = req.body ?? {};
+  const sl = slice && typeof slice === "object" ? slice : {};
+  const segCode = typeof code === "string" ? code.slice(0, 12000) : "";
+  const qa = typeof digest === "string" ? digest.trim().slice(0, 8000) : "";
+  if (!segCode.trim() && !qa) {
+    return res.status(400).json({ error: "缺少 code 或 digest 参数。" });
+  }
+  const err = llmConfigError();
+  if (err) return res.status(500).json({ error: err });
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+
+  if (isMock()) {
+    await mockStream(MOCK_QA_SUMMARY, (t) => res.write(t));
+    return res.end();
+  }
+
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content:
+        "你是耐心的编程老师，用简体中文为「一段代码」写复习总结。只总结给出的这一段代码，不要展开讲其它段落。" +
+        "输出 markdown，包含：①这段代码在做什么（一句话）；②关键逻辑要点（按执行顺序 3–6 条，引用行号）；" +
+        "③问答要点：用户问了什么、AI 的关键结论（若无问答明细，写「本段暂无问答」）；" +
+        "④追问与标注里沉淀的易错点或重点提醒（没有就省略）；⑤仍未解决的疑问（没有就写「暂无」）。" +
+        "问答相关内容只根据给出的明细，不要编造；语言简洁，面向编程新手。",
+    },
+    {
+      role: "user",
+      content:
+        `语言：${typeof language === "string" ? language : "未知"}\n` +
+        (typeof codePurpose === "string" && codePurpose
+          ? `代码整体用途：${codePurpose.slice(0, 200)}\n`
+          : "") +
+        `段落：第 ${sl.startLine ?? "?"}–${sl.endLine ?? "?"} 行「${typeof sl.title === "string" ? sl.title : ""}」` +
+        `${typeof sl.role === "string" && sl.role.trim() ? `（${sl.role.trim().slice(0, 120)}）` : ""}\n\n` +
+        (segCode.trim() ? `本段代码：\n\`\`\`\n${segCode}\n\`\`\`\n\n` : "") +
+        `问答明细：\n${qa || "（无）"}`,
+    },
+  ];
+
+  const abort = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) abort.abort();
+  });
+  try {
+    await chatCompletionStream(messages, (t) => res.write(t), abort.signal);
+    res.end();
+  } catch (e) {
+    res.write(`\n\n[出错] ${(e as Error).message}`);
+    res.end();
+  }
+});
+
+// ---------- POST /api/summary/export ----------
+// 把若干 md 文件写入 <base>/summary/<sub>/ 目录（base 为项目根或用户选择的目录，
+// sub 为代码文件相对路径如 code.py、src/a.py，每段消毒后逐级拼接，杜绝 .. 逃逸）。
+app.post("/api/summary/export", async (req, res) => {
+  const { base, sub, files } = req.body ?? {};
+  if (typeof base !== "string" || !base.trim() || !Array.isArray(files)) {
+    return res.status(400).json({ error: "缺少 base 或 files 参数。" });
+  }
+  const subParts = (typeof sub === "string" ? sub : "")
+    .split(/[\\/]+/)
+    .map(sanitizeFilename)
+    .filter((p) => p && p !== "." && p !== "..")
+    .slice(0, 12);
+  const dir = path.join(toLocalPath(base), "summary", ...subParts);
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const written: string[] = [];
+    for (const f of files.slice(0, 200)) {
+      const raw = typeof f?.name === "string" ? f.name : "";
+      const content = typeof f?.content === "string" ? f.content : "";
+      const name = sanitizeFilename(raw);
+      if (!name || !content.trim()) continue;
+      const fname = name.endsWith(".md") ? name : `${name}.md`;
+      await fsp.writeFile(path.join(dir, fname), content, "utf8");
+      written.push(fname);
+    }
+    res.json({ dir, written });
+  } catch (e) {
+    res.status(400).json({ error: `写入总结文件失败：${(e as Error).message}` });
+  }
+});
+
 // ---------- 工作区接口 ----------
 const MOCK_OVERVIEW = `# 项目概览（MOCK 示例）
 
@@ -397,6 +515,34 @@ app.post("/api/workspace/file", async (req, res) => {
   try {
     const out = await readProjectFile(root, rel);
     res.json(out);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// markdown 预览等场景引用的二进制资源（图片/音视频/pdf），限 root 内、≤20MB
+const ASSET_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon", bmp: "image/bmp",
+  avif: "image/avif", mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg",
+  wav: "audio/wav", ogg: "audio/ogg", pdf: "application/pdf",
+};
+app.get("/api/workspace/asset", async (req, res) => {
+  const root = req.query.root;
+  const rel = req.query.path;
+  if (typeof root !== "string" || !root.trim() || typeof rel !== "string" || !rel.trim()) {
+    return res.status(400).json({ error: "缺少 root 或 path 参数。" });
+  }
+  try {
+    const abs = await resolveInside(root, rel);
+    const st = await fsp.stat(abs);
+    if (!st.isFile() || st.size > 20 * 1024 * 1024) {
+      return res.status(404).json({ error: "资源不存在或过大。" });
+    }
+    const ext = path.extname(abs).slice(1).toLowerCase();
+    res.setHeader("Content-Type", ASSET_MIME[ext] ?? "application/octet-stream");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    res.send(await fsp.readFile(abs));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }

@@ -19,6 +19,8 @@ export interface TextMark {
   color: MarkColor;
   /** 文字标注内容（有备注的标注会带下划线） */
   note?: string;
+  /** 标注时选中文字的摘录（截断 ~120 字），供问答总结等场景使用 */
+  excerpt?: string;
 }
 
 /** 嵌在回答正文里的追问线程：锚定到父消息 textContent 的一段文字，插在所在块之后渲染。 */
@@ -53,6 +55,8 @@ export type ThreadPath = (number | string)[];
 export interface SessionSlice extends Slice {
   status: SliceStatus;
   messages: ChatMsg[];
+  /** 本段问答（问题/追问/标注）的 AI 总结，按段持久化 */
+  qaSummary?: string;
 }
 
 export interface Session {

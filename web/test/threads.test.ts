@@ -156,7 +156,7 @@ describe("countTree", () => {
         ],
       }),
     ];
-    expect(countTree(msgs)).toEqual({ questions: 3, marks: 2 });
+    expect(countTree(msgs)).toEqual({ questions: 3, marks: 2, threads: 2 });
   });
 });
 

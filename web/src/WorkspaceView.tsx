@@ -8,6 +8,7 @@ import {
   streamWorkspaceChat,
 } from "./api";
 import Reader, { type ReaderHandle } from "./Reader";
+import FileView from "./FileView";
 import MarkableMarkdown, {
   ChatIndex,
   MarkRail,
@@ -15,6 +16,7 @@ import MarkableMarkdown, {
   type ThreadCtxValue,
 } from "./MarkableMarkdown";
 import AutoTextarea from "./AutoTextarea";
+import { IconSend } from "./icons";
 import { usePaneZoom } from "./paneZoom";
 import {
   expandPath,
@@ -49,6 +51,7 @@ function collectFilePaths(tree: TreeNode[], out = new Set<string>()): Set<string
 export default function WorkspaceMain({
   workspace,
   filePath,
+  fileMode,
   sessions,
   onWorkspaceChange,
   onSessionChange,
@@ -60,10 +63,11 @@ export default function WorkspaceMain({
 }: {
   workspace: Workspace;
   filePath?: string;
+  fileMode?: "view" | "slice";
   sessions: Session[];
   onWorkspaceChange: (w: Workspace) => void;
   onSessionChange: (s: Session) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, mode?: "view" | "slice") => void;
   theme: Theme;
   onToggleTheme: () => void;
   readerRef: React.RefObject<ReaderHandle>;
@@ -145,9 +149,18 @@ export default function WorkspaceMain({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
-  // 有 filePath 但没有 session：读取文件并切分，创建 session
+  // 记住最近打开的文件（预览或切分都算），供「最近项目」恢复
   useEffect(() => {
-    if (!filePath || session || loadingFile) return;
+    if (filePath && wsRef.current.lastFilePath !== filePath) {
+      commitWs({ ...wsRef.current, lastFilePath: filePath });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath]);
+
+  // 切分模式（右击「切分阅读」）且没有 session：读取文件并切分，创建 session。
+  // 普通左键打开走 FileView，不触发 AI 切分。
+  useEffect(() => {
+    if (!filePath || fileMode !== "slice" || session || loadingFile) return;
     let cancelled = false;
     (async () => {
       setLoadingFile(filePath);
@@ -180,7 +193,6 @@ export default function WorkspaceMain({
           codePurpose: purpose,
         };
         onSessionChange(sess);
-        commitWs({ ...wsRef.current, lastFilePath: filePath });
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -191,7 +203,7 @@ export default function WorkspaceMain({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, session?.id]);
+  }, [filePath, fileMode, session?.id]);
 
   async function genOverview() {
     if (ovStreaming) return;
@@ -373,6 +385,18 @@ export default function WorkspaceMain({
   };
 
   if (filePath) {
+    // slice=切分阅读；view/未指定 = 普通预览（旧路由缺省时按有无会话推断）
+    const sliceMode = fileMode === "slice" || (fileMode === undefined && !!session);
+    if (!sliceMode) {
+      return (
+        <FileView
+          root={workspace.root}
+          filePath={filePath}
+          onSlice={() => onOpenFile(filePath, "slice")}
+          onOpenFile={(p) => onOpenFile(p, "view")}
+        />
+      );
+    }
     if (session) {
       return (
         <Reader
@@ -390,15 +414,20 @@ export default function WorkspaceMain({
           }}
           embedded
           onReslicingChange={onReslicing}
+          summaryBaseDir={workspace.root}
         />
       );
     }
     return (
-      <div className="ws-main-inner">
+      <div className="ws-main-inner ws-file-loading">
         {error ? (
           <div className="error-box">{error}</div>
         ) : (
-          <div className="ws-loading">正在读取并切分 {loadingFile || filePath}…</div>
+          <div className="ws-loading-card">
+            <div className="ws-loading-spinner" />
+            <div className="ws-loading-text">正在读取并切分 {loadingFile || filePath}…</div>
+            <div className="ws-loading-hint">大文件可能需要几秒，请稍候</div>
+          </div>
         )}
       </div>
     );
@@ -408,14 +437,22 @@ export default function WorkspaceMain({
     <div className="overview-pane">
       {error && <div className="error-box">{error}</div>}
       <div className="overview-head">
-        <strong>项目概览</strong>
-        <span>
+        <div className="overview-head-left">
+          <strong>项目概览</strong>
+          <span className="overview-sub">{workspace.name}</span>
+        </div>
+        <span className="overview-head-actions">
           {ovStreaming && (
-            <button className="link" onClick={() => ovAbortRef.current?.abort()}>
+            <button className="header-action-btn" onClick={() => ovAbortRef.current?.abort()}>
               中止
             </button>
           )}
-          <button className="link" disabled={ovStreaming} onClick={genOverview}>
+          <button
+            className="header-action-btn"
+            disabled={ovStreaming}
+            onClick={genOverview}
+            title="重新生成项目概览"
+          >
             重新生成
           </button>
         </span>
@@ -464,8 +501,9 @@ export default function WorkspaceMain({
         </div>
       </div>
       <div className="chat-input">
-        <div className="input-row">
+        <div className="composer-box overview-composer">
           <AutoTextarea
+            className="composer-input"
             placeholder={ovStreaming ? "正在回答…" : "就这个项目继续提问"}
             value={chatInput}
             disabled={ovStreaming}
@@ -477,13 +515,26 @@ export default function WorkspaceMain({
               }
             }}
           />
-          <button
-            className="primary"
-            disabled={!chatInput.trim() || ovStreaming}
-            onClick={sendWsChat}
-          >
-            发送
-          </button>
+          <div className="composer-bottom">
+            <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+            <div className="composer-actions">
+              {ovStreaming ? (
+                <button className="composer-stop" onClick={() => ovAbortRef.current?.abort()}>
+                  中止
+                </button>
+              ) : (
+                <button
+                  className="primary composer-send"
+                  disabled={!chatInput.trim()}
+                  onClick={sendWsChat}
+                  title="发送（Enter）"
+                >
+                  <IconSend size={14} />
+                  <span>发送</span>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
