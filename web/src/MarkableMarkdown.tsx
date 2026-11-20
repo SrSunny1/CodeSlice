@@ -18,12 +18,13 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
 import { loadLayout, saveLayout } from "./layout";
-import { countTree, indexTree, pathKey, type IndexNode } from "./threads";
+import { countTree, groupIndex, indexTree, pathKey, type IndexNode } from "./threads";
 import type {
   ChatMsg,
   InlineThread,
   MarkColor,
   MsgPath,
+  RevisitReminder,
   TextMark,
   ThreadPath,
 } from "./types";
@@ -43,10 +44,10 @@ interface HighlightRegistryLike {
   set(name: string, h: object): void;
   delete(name: string): void;
 }
-function hlRegistry(): HighlightRegistryLike | undefined {
+export function hlRegistry(): HighlightRegistryLike | undefined {
   return (globalThis as { CSS?: { highlights?: HighlightRegistryLike } }).CSS?.highlights;
 }
-function makeHighlight(ranges: Range[]): object | null {
+export function makeHighlight(ranges: Range[]): object | null {
   const H = (globalThis as { Highlight?: new (...r: Range[]) => object }).Highlight;
   return H ? new H(...ranges) : null;
 }
@@ -82,6 +83,11 @@ export interface ThreadCtxValue {
   ): void;
   onDeleteThread(tp: ThreadPath): void;
   onAbort(): void;
+  /** 「以后再看」：宿主（Reader）接住选区锚点后弹目标段选择；不提供时按钮隐藏 */
+  onRequestRevisit?: (
+    path: MsgPath,
+    anchor: Pick<RevisitReminder, "start" | "end" | "excerpt">
+  ) => void;
 }
 export const ThreadCtx = createContext<ThreadCtxValue | null>(null);
 
@@ -518,6 +524,8 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
   const ctx = useContext(ThreadCtx);
   const boxRef = useRef<HTMLDivElement>(null);
   const palRef = useRef<HTMLDivElement>(null);
+  // 未发送的追问草稿：浮板关闭不丢，重新打开追问时回填
+  const askDraftRef = useRef("");
   const instId = useId();
   const markable = !!ctx && marksSupported();
   const [pal, setPal] = useState<PalState | null>(null);
@@ -587,7 +595,11 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
   // 点外部 / 滚动 / Esc 关闭浮板
   useEffect(() => {
     if (!pal) return;
-    const close = () => setPal(null);
+    const close = (e?: Event) => {
+      // 浮板内部（如输入框自身滚动）不触发关闭
+      if (e && palRef.current?.contains(e.target as Node)) return;
+      setPal(null);
+    };
     const onDown = (e: MouseEvent) => {
       if (palRef.current && !palRef.current.contains(e.target as Node)) close();
     };
@@ -602,6 +614,11 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
       document.removeEventListener("scroll", close, true);
       document.removeEventListener("keydown", onKey);
     };
+  }, [pal]);
+
+  // 追问输入期间持续同步草稿缓存（仅在输入模式下，避免关闭/重开时被清空）
+  useEffect(() => {
+    if (pal?.ask) askDraftRef.current = pal.askDraft;
   }, [pal]);
 
   function onMouseUp(e: ReactMouseEvent<HTMLDivElement>) {
@@ -737,6 +754,16 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
     const text = pal.askDraft.trim();
     if (!text || ctx.busy) return;
     ctx.onAsk(path, pal.range, text);
+    askDraftRef.current = "";
+    setPal(null);
+    window.getSelection()?.removeAllRanges();
+  }
+
+  // 「以后再看」：把选区锚点交给宿主（Reader 侧选目标段），不创建标注
+  function requestRevisit() {
+    if (!pal?.range || !ctx?.onRequestRevisit) return;
+    const { start, end, quote } = pal.range;
+    ctx.onRequestRevisit(path, { start, end, excerpt: quote ? trunc(quote, 120) : "" });
     setPal(null);
     window.getSelection()?.removeAllRanges();
   }
@@ -775,10 +802,10 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
             onMouseUp={(e) => e.stopPropagation()}
           >
             {pal.ask ? (
-              <div className="mark-note-editor">
-                <textarea
+              <div className="mark-note-editor ask-editor">
+                <AutoTextarea
                   autoFocus
-                  rows={3}
+                  maxH={140}
                   placeholder="就这处提问…（Enter 发送，Shift+Enter 换行）"
                   value={pal.askDraft}
                   onChange={(e) => setPal({ ...pal, askDraft: e.target.value })}
@@ -815,9 +842,18 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
                     <button
                       className="mark-ask"
                       title="就这处发起追问"
-                      onClick={() => setPal({ ...pal, ask: true, askDraft: "" })}
+                      onClick={() => setPal({ ...pal, ask: true, askDraft: askDraftRef.current })}
                     >
                       💬 追问
+                    </button>
+                  )}
+                  {pal.range && ctx?.onRequestRevisit && (
+                    <button
+                      className="mark-ask"
+                      title="标记这处，到后面的段落时提醒回看"
+                      onClick={requestRevisit}
+                    >
+                      ⏳ 以后再看
                     </button>
                   )}
                   <button className="mark-erase" title="清除标注" onClick={erase}>
@@ -826,9 +862,9 @@ export default function MarkableMarkdown({ msg, path }: { msg: ChatMsg; path: Ms
                 </div>
                 {pal.editingNote && (
                   <div className="mark-note-editor">
-                    <textarea
+                    <AutoTextarea
                       autoFocus
-                      rows={3}
+                      maxH={140}
                       placeholder="写点标注…（Ctrl+Enter 保存）"
                       value={pal.noteDraft}
                       onChange={(e) => setPal({ ...pal, noteDraft: e.target.value })}
@@ -994,73 +1030,123 @@ interface IndexRowsProps {
   onCtx: (e: React.MouseEvent, n: IndexNode) => void;
 }
 
+function indexItemKey(n: IndexNode): string {
+  if (n.kind === "q") return `q-${pathKey(n.path)}`;
+  if (n.kind === "mark") return `m-${pathKey(n.path)}-${n.markIdx}`;
+  return `t-${pathKey(n.path)}`;
+}
+
+/** 渲染单个索引节点：追问带子树（其子节点同样按「问」分组），标注是一行。 */
+function IndexItem({ n, closed, excerpts, onToggle, onJump, onCtx }: IndexRowsProps & { n: IndexNode }) {
+  if (n.kind === "thread") {
+    const k = pathKey(n.path);
+    const cl = closed.has(k);
+    return (
+      <div>
+        <div className="ci-trow-wrap" onContextMenu={(e) => onCtx(e, n)}>
+          <button className="ci-caret" onClick={() => onToggle(k)}>
+            {cl ? "▸" : "▾"}
+          </button>
+          <button
+            className="ci-trow ci-thr"
+            title={`追问：${n.quote}`}
+            onClick={() => onJump(n)}
+          >
+            <span className="ci-th">💬</span>
+            <span className="ci-txt">追问：{n.quote}</span>
+          </button>
+        </div>
+        {!cl && (
+          <div className="ci-children">
+            <IndexRows
+              nodes={n.children}
+              closed={closed}
+              excerpts={excerpts}
+              onToggle={onToggle}
+              onJump={onJump}
+              onCtx={onCtx}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (n.kind === "mark") {
+    const label =
+      n.mark.note || excerpts[`${pathKey(n.path)}:${n.markIdx}`] || "标注";
+    return (
+      <button
+        className="ci-trow ci-mark"
+        title={
+          n.mark.note
+            ? `📝 ${n.mark.note}`
+            : excerpts[`${pathKey(n.path)}:${n.markIdx}`] ?? ""
+        }
+        onClick={() => onJump(n)}
+        onContextMenu={(e) => onCtx(e, n)}
+      >
+        <span className={`ci-m m-${n.mark.color}${n.mark.note ? " note" : ""}`} />
+        <span className="ci-txt">{label}</span>
+      </button>
+    );
+  }
+  return null;
+}
+
+/** 按「问」分组渲染：组头可折叠、显示注/追问数；组内项沿引导线缩进。 */
 function IndexRows({ nodes, closed, excerpts, onToggle, onJump, onCtx }: IndexRowsProps) {
+  const groups = groupIndex(nodes);
+  const itemProps = { nodes, closed, excerpts, onToggle, onJump, onCtx };
   return (
     <>
-      {nodes.map((n) => {
-        if (n.kind === "thread") {
-          const k = pathKey(n.path);
-          const cl = closed.has(k);
+      {groups.map((g, gi) => {
+        if (!g.q) {
           return (
-            <div key={`t-${k}`}>
-              <div
-                className="ci-trow-wrap"
-                onContextMenu={(e) => onCtx(e, n)}
-              >
-                <button className="ci-caret" onClick={() => onToggle(k)}>
-                  {cl ? "▸" : "▾"}
-                </button>
-                <button
-                  className="ci-trow"
-                  title={`追问：${n.quote}`}
-                  onClick={() => onJump(n)}
-                >
-                  <span className="ci-th">💬</span>
-                  <span className="ci-txt">追问：{n.quote}</span>
-                </button>
-              </div>
-              {!cl && (
-                <div className="ci-children">
-                  <IndexRows
-                    nodes={n.children}
-                    closed={closed}
-                    excerpts={excerpts}
-                    onToggle={onToggle}
-                    onJump={onJump}
-                    onCtx={onCtx}
-                  />
-                </div>
-              )}
+            <div key={`lead-${gi}`}>
+              {g.rows.map((n) => (
+                <IndexItem key={indexItemKey(n)} n={n} {...itemProps} />
+              ))}
             </div>
           );
         }
-        const key =
-          n.kind === "q" ? `q-${pathKey(n.path)}` : `m-${pathKey(n.path)}-${n.markIdx}`;
-        const label =
-          n.kind === "q"
-            ? n.text
-            : n.mark.note || excerpts[`${pathKey(n.path)}:${n.markIdx}`] || "标注";
+        const qn = g.q;
+        const gk = `g-${pathKey(qn.path)}`;
+        const cl = closed.has(gk);
+        const marks = g.rows.filter((r) => r.kind === "mark").length;
+        const ths = g.rows.filter((r) => r.kind === "thread").length;
         return (
-          <button
-            key={key}
-            className="ci-trow"
-            title={
-              n.kind === "q"
-                ? n.text
-                : n.mark.note
-                  ? `📝 ${n.mark.note}`
-                  : excerpts[`${pathKey(n.path)}:${n.markIdx}`] ?? ""
-            }
-            onClick={() => onJump(n)}
-            onContextMenu={(e) => onCtx(e, n)}
-          >
-            {n.kind === "q" ? (
-              <span className="ci-q">问</span>
-            ) : (
-              <span className={`ci-m m-${n.mark.color}${n.mark.note ? " note" : ""}`} />
+          <div key={gk} className="ci-group">
+            <div className="ci-trow-wrap">
+              {g.rows.length ? (
+                <button className="ci-caret" onClick={() => onToggle(gk)}>
+                  {cl ? "▸" : "▾"}
+                </button>
+              ) : (
+                <span className="ci-caret ghost" aria-hidden />
+              )}
+              <button
+                className="ci-trow ci-qrow"
+                title={qn.text}
+                onClick={() => onJump(qn)}
+              >
+                <span className="ci-q">问</span>
+                <span className="ci-txt">{qn.text}</span>
+                {(marks > 0 || ths > 0) && (
+                  <span className="ci-gbadges">
+                    {marks > 0 && <i>注{marks}</i>}
+                    {ths > 0 && <i>追{ths}</i>}
+                  </span>
+                )}
+              </button>
+            </div>
+            {!cl && g.rows.length > 0 && (
+              <div className="ci-children">
+                {g.rows.map((n) => (
+                  <IndexItem key={indexItemKey(n)} n={n} {...itemProps} />
+                ))}
+              </div>
             )}
-            <span className="ci-txt">{label}</span>
-          </button>
+          </div>
         );
       })}
     </>

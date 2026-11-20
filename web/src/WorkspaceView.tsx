@@ -471,7 +471,9 @@ export default function WorkspaceMain({
       <div className="overview-head">
         <div className="overview-head-left">
           <strong>项目概览</strong>
-          <span className="overview-sub">{workspace.name}</span>
+          <span className="overview-sub" title={workspace.root}>
+            {workspace.alias || workspace.name}
+          </span>
         </div>
         <span className="overview-head-actions">
           {ovStreaming && (

@@ -1,15 +1,18 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Highlight, themes } from "prism-react-renderer";
+import { Highlight, Prism, normalizeTokens, themes } from "prism-react-renderer";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AutoTextarea from "./AutoTextarea";
-import MarkableMarkdown, { ChatIndex, MarkRail, ThreadCtx, type ThreadCtxValue } from "./MarkableMarkdown";
+import MarkableMarkdown, { ChatIndex, MarkRail, ThreadCtx, hlRegistry, makeHighlight, rangeForText, revealRange, type ThreadCtxValue } from "./MarkableMarkdown";
+import { collectRevisitReminders, newRevisitId, type RevisitEntry } from "./revisit";
+import { classifySpans, findSymbolRefs, identifierAt } from "./symbolRefs";
 import {
   exportSummaryFiles,
   postSlice,
   streamChat,
   streamSliceQA,
   streamSummary,
+  suggestRevisitTarget,
   type ProjectContext,
 } from "./api";
 import FolderPicker from "./FolderPicker";
@@ -33,7 +36,7 @@ import {
   updateThread,
 } from "./threads";
 import type { Theme } from "./theme";
-import type { ChatMsg, InlineThread, MsgPath, Session, SessionSlice, ThreadPath } from "./types";
+import type { ChatMsg, InlineThread, MsgPath, RevisitReminder, Session, SessionSlice, ThreadPath } from "./types";
 
 const SLICE_COLORS = ["#4f8cff", "#9a6bff", "#ff9f43", "#2fbf71", "#ff5c7a", "#17becf", "#e0c341"];
 const SUMMARY_DIR_KEY = "codeslice:summaryDir";
@@ -42,9 +45,61 @@ function sliceIndexAt(slices: SessionSlice[], line: number): number {
   return slices.findIndex((s) => line >= s.startLine && line <= s.endLine);
 }
 
+/** 鼠标位置落在 root（.line-content）内的文本偏移；无 caret API 或不在 root 内返回 null。 */
+function caretTextOffset(root: HTMLElement, x: number, y: number): number | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (
+      x: number,
+      y: number
+    ) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  let node: Node | null = null;
+  let offset = 0;
+  const pos = doc.caretPositionFromPoint?.(x, y);
+  if (pos) {
+    node = pos.offsetNode;
+    offset = pos.offset;
+  } else {
+    const r = doc.caretRangeFromPoint?.(x, y);
+    if (r) {
+      node = r.startContainer;
+      offset = r.startOffset;
+    }
+  }
+  if (!node || !root.contains(node)) return null;
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
+/** 引用面板里各类型的展示顺序与标题；行内 tag 用短标签。 */
+const SYM_KIND_ORDER = [
+  { kind: "def", label: "定义" },
+  { kind: "assign", label: "赋值" },
+  { kind: "call", label: "调用" },
+  { kind: "import", label: "导入" },
+  { kind: "ref", label: "引用" },
+  { kind: "text", label: "注释或字符串" },
+] as const;
+const SYM_KIND_TAG: Record<string, string> = {
+  def: "定义",
+  assign: "赋值",
+  call: "调用",
+  import: "导入",
+  ref: "引用",
+  text: "文本",
+};
+
 export interface ReaderHandle {
   reslice: () => void;
 }
+
+/** 「以后再看」AI 建议状态机：idle=待发起，loading=请求中，matched/unmatched/error=已出结果。 */
+type RevisitSuggestion =
+  | { kind: "idle" | "loading" | "unmatched" | "error" }
+  | { kind: "matched"; sliceId: string };
 
 interface ReaderProps {
   session: Session;
@@ -91,6 +146,35 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const dirPickRef = useRef<((dir: string | null) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // ---------- 「以后再看」待回看 ----------
+  // 未保存的草稿：选完文字后在这里挑目标段；导航/取消即丢弃
+  const [pendingRevisit, setPendingRevisit] = useState<{
+    sliceId: string;
+    path: MsgPath;
+    anchor: Pick<RevisitReminder, "start" | "end" | "excerpt">;
+  } | null>(null);
+  // null = 交给 AI 自动建议；"" = 显式选「仅加入待回看」；其它 = 手动选的目标段 id
+  const [revisitManualTarget, setRevisitManualTarget] = useState<string | null>(null);
+  const [revisitSuggestion, setRevisitSuggestion] = useState<RevisitSuggestion>({ kind: "idle" });
+  const [revisitOpen, setRevisitOpen] = useState(false);
+  // 显式回看跳转：与 expand/currentSliceId 同批提交后，由 effect 定位选区滚动
+  const [revisitJump, setRevisitJump] = useState<{
+    path: MsgPath;
+    start: number;
+    end: number;
+  } | null>(null);
+  // 置位期间跳过聊天区自动跟底，避免和回看定位抢滚动
+  const revisitScrollRef = useRef(false);
+  // ---------- 双击标识符查引用（只读代码区，不写会话） ----------
+  const [symFocus, setSymFocus] = useState<{
+    name: string;
+    originLine: number;
+    originCol: number;
+    active: number;
+  } | null>(null);
+  // 第一次点击记录：双击第二次 click 时第一次的 caret 信息（首击可能触发滚动）
+  const clickSymRef = useRef<{ line: number; col: number | null; t: number } | null>(null);
+  const symListRef = useRef<HTMLDivElement>(null);
 
   const sessionRef = useRef<Session>(session);
   sessionRef.current = session;
@@ -148,6 +232,18 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const allDone = session.slices.every((s) => s.status === "done");
   const doneCount = session.slices.filter((s) => s.status === "done").length;
   const lines = useMemo(() => session.code.split("\n"), [session.code]);
+  // Prism token → 行内 inert（注释/字符串）与 skip（关键字/数字等）区间表
+  const codeSpans = useMemo(() => {
+    const g = Prism.languages[session.language.toLowerCase()];
+    return classifySpans(
+      normalizeTokens(g ? Prism.tokenize(session.code, g) : [session.code])
+    );
+  }, [session.code, session.language]);
+  const symRefs = useMemo(
+    () => (symFocus ? findSymbolRefs(lines, symFocus.name, codeSpans.inert) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [symFocus?.name, lines, codeSpans]
+  );
 
   function commit(next: Session) {
     sessionRef.current = next;
@@ -258,6 +354,135 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     patchSliceMessages(curSliceId(), (ms) => removeThread(ms, tp));
   }
 
+  // ---------- 「以后再看」待回看 ----------
+
+  /** 保存待回看提醒：同 start/end 的旧提醒先替换掉，避免重复。 */
+  function saveRevisit() {
+    const d = pendingRevisit;
+    if (!d) return;
+    // 目标段必须在当前「来源段之后」的列表里，否则按无目标保存
+    const sess = sessionRef.current;
+    const srcIdx = sess.slices.findIndex((s) => s.id === d.sliceId);
+    const laterIds =
+      srcIdx >= 0 ? new Set(sess.slices.slice(srcIdx + 1).map((s) => s.id)) : new Set<string>();
+    const target = revisitTargetId && laterIds.has(revisitTargetId) ? revisitTargetId : undefined;
+    const reminder: RevisitReminder = {
+      id: newRevisitId(),
+      start: d.anchor.start,
+      end: d.anchor.end,
+      excerpt: d.anchor.excerpt.slice(0, 120),
+      targetSliceId: target,
+    };
+    patchSliceMessages(d.sliceId, (ms) =>
+      updateMsg(ms, d.path, (m) => ({
+        ...m,
+        revisitReminders: [
+          ...(m.revisitReminders ?? []).filter(
+            (r) => !(r.start === reminder.start && r.end === reminder.end)
+          ),
+          reminder,
+        ],
+      }))
+    );
+    setPendingRevisit(null);
+  }
+
+  /** 显式标为已回看：只移除提醒本身，不动标注/追问/消息。 */
+  function markRevisited(e: RevisitEntry) {
+    patchSliceMessages(e.sliceId, (ms) =>
+      updateMsg(ms, e.path, (m) => ({
+        ...m,
+        revisitReminders: (m.revisitReminders ?? []).filter((r) => r.id !== e.reminder.id),
+      }))
+    );
+  }
+
+  /** 跳到提醒来源：展开途经的收起追问，提交后由 revisitJump effect 定位选区。 */
+  function jumpToRevisit(e: RevisitEntry) {
+    if (streaming) return;
+    const sess = sessionRef.current;
+    const src = sess.slices.find((s) => s.id === e.sliceId);
+    if (!src) return;
+    const expanded = expandPath(src.messages, e.path.slice(0, -1) as ThreadPath);
+    const slices = sess.slices.map((s) =>
+      s.id === src.id
+        ? {
+            ...s,
+            messages: expanded,
+            status: s.status === "unread" ? ("reading" as const) : s.status,
+          }
+        : s
+    );
+    revisitScrollRef.current = true;
+    setRevisitJump({ path: e.path, start: e.reminder.start, end: e.reminder.end });
+    commit({ ...sess, slices, currentSliceId: src.id });
+  }
+
+  // 全部待回看项（任意段可见，带计数）；到期项=别的段指定了「到本段提醒」
+  const revisitEntries = useMemo(
+    () => collectRevisitReminders(session.slices),
+    [session.slices]
+  );
+  const dueRevisit = cur
+    ? revisitEntries.filter(
+        (e) => e.sliceId !== cur.id && e.reminder.targetSliceId === cur.id
+      )
+    : [];
+  // 目标段：手动选择优先；自动模式下取 AI 建议（未出结果/未匹配=无目标）
+  const revisitTargetId =
+    revisitManualTarget ??
+    (revisitSuggestion.kind === "matched" ? revisitSuggestion.sliceId : "");
+
+  // ---------- 双击标识符查引用 ----------
+
+  /** 跳到第 i 处引用：只更新激活项并滚动代码区，不动会话/选区/段落状态。 */
+  function jumpToRef(i: number) {
+    const ref = symRefs[i];
+    if (!ref || !symFocus) return;
+    setSymFocus({ ...symFocus, active: i });
+    document.getElementById(`cl-${ref.line}`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
+    });
+  }
+
+  /** 双击代码：识别 caret 处的标识符，收集全文引用并打开面板。 */
+  function onCodeDoubleClick(e: React.MouseEvent) {
+    // 优先用第一次 click 的记录（首击若切了段会触发平滑滚动，第二击坐标已飘）
+    const rec = clickSymRef.current;
+    let line: number | null = null;
+    let col: number | null = null;
+    if (rec && performance.now() - rec.t < 700) {
+      line = rec.line;
+      col = rec.col;
+    } else {
+      const lineEl = (e.target as HTMLElement).closest(".code-line");
+      const content = lineEl?.querySelector(".line-content");
+      const m = /^cl-(\d+)$/.exec(lineEl?.id ?? "");
+      if (m && content instanceof HTMLElement) {
+        line = Number(m[1]);
+        col = caretTextOffset(content, e.clientX, e.clientY);
+      }
+    }
+    if (line === null || col === null) return;
+    const hit = identifierAt(lines[line - 1] ?? "", col);
+    if (!hit) return;
+    // 点在关键字/数字/符号 token 上不触发
+    const skipped = codeSpans.skip[line - 1] ?? [];
+    if (skipped.some(([s, e2]) => hit.start >= s && hit.start < e2)) return;
+    const refs = findSymbolRefs(lines, hit.name, codeSpans.inert);
+    if (!refs.length) return;
+    const idx = refs.findIndex((r) => r.line === line && r.col === hit.start);
+    setSymFocus({
+      name: hit.name,
+      originLine: line,
+      originCol: hit.start,
+      active: Math.max(0, idx),
+    });
+    setSplitLine(null);
+  }
+
   const threadRounds = useMemo(
     () => threadRoundMap(cur?.messages ?? []),
     [cur?.messages]
@@ -336,6 +561,16 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     onAbort() {
       abortRef.current?.abort();
     },
+    onRequestRevisit(mp, anchor) {
+      const sess = sessionRef.current;
+      const idx = sess.slices.findIndex((s) => s.id === sess.currentSliceId);
+      if (idx < 0) return;
+      setPendingRevisit({ sliceId: sess.slices[idx].id, path: mp, anchor });
+      // 新草稿：回到自动模式，由 effect 发 AI 建议请求（不再默认下一段）
+      setRevisitManualTarget(null);
+      setRevisitSuggestion({ kind: "idle" });
+      setRevisitOpen(true);
+    },
   };
 
   // 卸载时中止进行中的流式请求（已收到的部分会由 AbortError 分支保存）。
@@ -352,6 +587,8 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     setSelection(null);
     setSelAnchor(null);
     setSplitLine(null);
+    // 未保存的「以后再看」草稿随导航丢弃
+    setPendingRevisit(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.currentSliceId]);
 
@@ -359,6 +596,11 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   // 追问流刚结束保持原位不回跳底部，让用户停在追问处。
   const prevStreamKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    // 回看跳转自带定位滚动，本次跳过跟随/回底（标志在 revisitJump effect 里清除）
+    if (revisitScrollRef.current) {
+      prevStreamKeyRef.current = streamKey;
+      return;
+    }
     const threadKey =
       streamKey && streamKey !== "main" && streamKey !== "summary" && streamKey !== "sliceqa"
         ? streamKey
@@ -376,6 +618,149 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     }
     prevStreamKeyRef.current = streamKey;
   }, [cur?.messages.length, streamText, streamKey]);
+
+  // 「以后再看」跳转落位：提交 expand/currentSliceId 的同一批渲染完成后，
+  // 等两帧让展开的消息挂载好，再按 textContent 偏移重建 Range 滚动并选中；
+  // Range 不可得时退化为滚到整条消息。
+  useEffect(() => {
+    if (!revisitJump) return;
+    const j = revisitJump;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        revisitScrollRef.current = false;
+        const c = chatScrollRef.current;
+        if (c) {
+          const root = c.querySelector(`[data-mark-root="${pathKey(j.path)}"]`);
+          const r =
+            root instanceof HTMLElement ? rangeForText(root, j.start, j.end) : null;
+          if (r) {
+            revealRange(c, r, { select: true });
+          } else {
+            c.querySelector(`[data-msg-path="${pathKey(j.path)}"]`)?.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          }
+        }
+        setRevisitJump(null);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+      revisitScrollRef.current = false;
+    };
+  }, [revisitJump]);
+
+  // 「以后再看」AI 建议：新草稿出现时，让 AI 在来源段之后的段落里找
+  // 最后一处相关段落。快照取自 sessionRef（起草瞬间的会话），切换/取消时
+  // abort，过期结果直接丢弃；末段无候选不发请求。
+  useEffect(() => {
+    const d = pendingRevisit;
+    if (!d) return;
+    const sess = sessionRef.current;
+    const srcIdx = sess.slices.findIndex((s) => s.id === d.sliceId);
+    if (srcIdx < 0) return;
+    const later = sess.slices.slice(srcIdx + 1);
+    if (later.length === 0) return;
+    if (later.length > 200) {
+      // 候选过多不硬截（会悄悄丢段），交给用户手动选择
+      setRevisitSuggestion({ kind: "error" });
+      return;
+    }
+    const src = sess.slices[srcIdx];
+    const codeLines = sess.code.split("\n");
+    // ~60000 字符预算摊给 source + 全部候选，每段封顶 1400；超长取头尾
+    const per = Math.min(1400, Math.floor(60000 / (later.length + 1)));
+    const clip = (s: SessionSlice): string => {
+      const text = codeLines.slice(s.startLine - 1, s.endLine).join("\n");
+      if (text.length <= per) return text;
+      const half = Math.floor((per - 3) / 2);
+      return `${text.slice(0, half)}\n…\n${text.slice(text.length - half)}`;
+    };
+    const candidates = later.map((s) => ({ title: s.title, code: clip(s) }));
+    setRevisitSuggestion({ kind: "loading" });
+    const ac = new AbortController();
+    suggestRevisitTarget(
+      {
+        excerpt: d.anchor.excerpt,
+        source: { title: src.title, code: clip(src) },
+        candidates,
+      },
+      ac.signal
+    )
+      .then(({ targetIndex }) => {
+        if (ac.signal.aborted) return;
+        const hit = targetIndex !== null ? later[targetIndex] : undefined;
+        setRevisitSuggestion(
+          hit ? { kind: "matched", sliceId: hit.id } : { kind: "unmatched" }
+        );
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setRevisitSuggestion({ kind: "error" });
+      });
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRevisit]);
+
+  // 双击引用高亮：CSS Custom Highlight API（cs-symref 全部 / cs-symref-cur 激活项），
+  // 浏览器不支持时静默无高亮。
+  useEffect(() => {
+    const reg = hlRegistry();
+    if (!reg) return;
+    if (!symFocus || !symRefs.length) {
+      reg.delete("cs-symref");
+      reg.delete("cs-symref-cur");
+      return;
+    }
+    const all: Range[] = [];
+    const curRanges: Range[] = [];
+    symRefs.forEach((r, i) => {
+      const el = document
+        .getElementById(`cl-${r.line}`)
+        ?.querySelector(".line-content");
+      if (!(el instanceof HTMLElement)) return;
+      const range = rangeForText(el, r.col, r.col + symFocus.name.length);
+      if (!range) return;
+      all.push(range);
+      if (i === symFocus.active) curRanges.push(range);
+    });
+    const setHl = (name: string, ranges: Range[]) => {
+      const h = ranges.length ? makeHighlight(ranges) : null;
+      if (h) reg.set(name, h);
+      else reg.delete(name);
+    };
+    setHl("cs-symref", all);
+    setHl("cs-symref-cur", curRanges);
+    return () => {
+      reg.delete("cs-symref");
+      reg.delete("cs-symref-cur");
+    };
+  }, [symFocus?.name, symFocus?.active, symRefs]);
+
+  // Esc 关闭引用面板（仅打开时挂监听）
+  useEffect(() => {
+    if (!symFocus) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.key === "Escape") setSymFocus(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [symFocus]);
+
+  // 激活行进列表可视区：只调 scrollTop，不用 scrollIntoView（会连带滚动代码区）
+  useEffect(() => {
+    const list = symListRef.current;
+    if (!list) return;
+    const el = list.querySelector(".symref-row.active");
+    if (!(el instanceof HTMLElement)) return;
+    const lRect = list.getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    if (eRect.top < lRect.top) list.scrollTop += eRect.top - lRect.top;
+    else if (eRect.bottom > lRect.bottom) list.scrollTop += eRect.bottom - lRect.bottom;
+  }, [symFocus?.active, symRefs]);
 
   function gotoSlice(s: SessionSlice) {
     if (streaming) return;
@@ -721,6 +1106,57 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
     }
   }
 
+  // 待回看草稿可选目标：来源段之后的所有段（末段只能「仅加入待回看」）
+  const draftSrcIdx = pendingRevisit
+    ? session.slices.findIndex((s) => s.id === pendingRevisit.sliceId)
+    : -1;
+  const draftTargets = draftSrcIdx >= 0 ? session.slices.slice(draftSrcIdx + 1) : [];
+  // 仅在自动模式下等待 AI 结果时禁用保存；用户手动选了目标或「仅加入待回看」即可立即保存
+  const autoPending =
+    revisitManualTarget === null &&
+    draftTargets.length > 0 &&
+    (revisitSuggestion.kind === "idle" || revisitSuggestion.kind === "loading");
+  const revisitAutoLabel =
+    revisitSuggestion.kind === "matched"
+      ? `AI 建议：${session.slices.find((s) => s.id === revisitSuggestion.sliceId)?.title ?? "目标段"}`
+      : revisitSuggestion.kind === "unmatched"
+        ? "AI 未找到相关段落"
+        : revisitSuggestion.kind === "error"
+          ? "AI 判断失败，请手动选择"
+          : "AI 正在查找最后一处相关段落…";
+
+  function revisitRow(e: RevisitEntry) {
+    const src = session.slices.find((s) => s.id === e.sliceId);
+    const tgt = e.reminder.targetSliceId
+      ? session.slices.find((s) => s.id === e.reminder.targetSliceId)
+      : undefined;
+    return (
+      <div className="rv-item" key={e.reminder.id}>
+        <button
+          className="rv-text"
+          disabled={streaming}
+          onClick={() => jumpToRevisit(e)}
+          title="跳转到标记位置"
+        >
+          「{e.reminder.excerpt || "…"}」
+        </button>
+        <div className="rv-meta">
+          <span className="rv-src" title={src?.title}>
+            自 {src?.title ?? "已删除段落"}
+          </span>
+          {e.reminder.targetSliceId && (
+            <span className="rv-tgt" title={tgt?.title}>
+              → {tgt?.title ?? "目标段已删"}
+            </span>
+          )}
+        </div>
+        <button className="link rv-done" onClick={() => markRevisited(e)}>
+          标为已回看
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="reader">
       {!embedded && (
@@ -763,10 +1199,13 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
             {splitLine !== null && (
               <span className="code-toolbar-hint">点击行号选区提问 · 点击代码行可作拆分点</span>
             )}
+            {splitLine === null && (
+              <span className="code-toolbar-hint sym-hint">双击函数/变量名查看调用关系</span>
+            )}
           </div>
           <Highlight theme={prismTheme} code={session.code} language={session.language}>
             {({ tokens, getLineProps, getTokenProps }) => (
-              <pre className="code-pre">
+              <pre className="code-pre" onDoubleClick={onCodeDoubleClick}>
                 {tokens.map((lineTokens, i) => {
                   const lineNo = i + 1;
                   const si = sliceIndexAt(session.slices, lineNo);
@@ -779,6 +1218,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                     sl?.status === "done" ? "done" : "",
                     inSel ? "selected" : "",
                     splitLine === lineNo ? "split-target" : "",
+                    symFocus && symRefs[symFocus.active]?.line === lineNo ? "ref-active" : "",
                   ].join(" ");
                   return (
                     <div
@@ -787,7 +1227,20 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                       {...getLineProps({ line: lineTokens })}
                       className={cls}
                       style={{ borderLeftColor: SLICE_COLORS[si % SLICE_COLORS.length] }}
-                      onClick={() => {
+                      onClick={(e) => {
+                        // 双击的第二击不切段/不设拆分点；首击记录 caret 供双击用
+                        if (e.detail > 1) return;
+                        const content = e.currentTarget.querySelector(".line-content");
+                        clickSymRef.current = {
+                          line: lineNo,
+                          col:
+                            content instanceof HTMLElement &&
+                            e.target instanceof Node &&
+                            content.contains(e.target)
+                              ? caretTextOffset(content, e.clientX, e.clientY)
+                              : null,
+                          t: performance.now(),
+                        };
                         if (!isCur && sl) gotoSlice(sl);
                         else onCodeLineClick(lineNo);
                       }}
@@ -819,6 +1272,82 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
               </pre>
             )}
           </Highlight>
+          {symFocus && (
+            <div className="symref-panel">
+              <div className="symref-head">
+                <strong className="symref-name">「{symFocus.name}」</strong>
+                <span className="symref-summary">
+                  {symRefs.length === 1
+                    ? "文件内只出现这一处"
+                    : `共 ${symRefs.length} 处` +
+                      SYM_KIND_ORDER.map(({ kind, label }) => {
+                        const n = symRefs.filter((r) => r.kind === kind).length;
+                        return n ? ` · ${label} ${n}` : "";
+                      }).join("")}
+                </span>
+                <span className="symref-nav">
+                  <button
+                    type="button"
+                    title="上一处"
+                    disabled={!symRefs.length}
+                    onClick={() =>
+                      jumpToRef((symFocus.active - 1 + symRefs.length) % symRefs.length)
+                    }
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    title="下一处"
+                    disabled={!symRefs.length}
+                    onClick={() => jumpToRef((symFocus.active + 1) % symRefs.length)}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    title="关闭（Esc）"
+                    onClick={() => setSymFocus(null)}
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+              <div className="symref-list" ref={symListRef}>
+                {symRefs.slice(0, 300).map((r, i) => {
+                  const seg = sliceIndexAt(session.slices, r.line);
+                  const isOrigin =
+                    r.line === symFocus.originLine && r.col === symFocus.originCol;
+                  return (
+                    <button
+                      type="button"
+                      key={`${r.line}:${r.col}`}
+                      className={`symref-row${i === symFocus.active ? " active" : ""}`}
+                      onClick={() => jumpToRef(i)}
+                    >
+                      <span className={`symref-kind k-${r.kind}`}>
+                        {SYM_KIND_TAG[r.kind] ?? r.kind}
+                      </span>
+                      <span className="symref-ln">L{r.line}</span>
+                      <code className="symref-text">{r.text}</code>
+                      <span className="symref-where">
+                        {[
+                          r.scope ? `在 ${r.scope} 中` : "",
+                          seg >= 0 ? `第 ${seg + 1} 段` : "",
+                          isOrigin ? "双击处" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </button>
+                  );
+                })}
+                {symRefs.length > 300 && (
+                  <div className="symref-more">仅显示前 300 处</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div
@@ -940,6 +1469,16 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                 </span>
               </div>
               <div className="chat-header-actions">
+                {(revisitEntries.length > 0 || pendingRevisit) && (
+                  <button
+                    type="button"
+                    className="header-action-btn"
+                    aria-expanded={revisitOpen}
+                    onClick={() => setRevisitOpen((open) => !open)}
+                  >
+                    以后再看 ({revisitEntries.length}) {revisitOpen ? "▾" : "▸"}
+                  </button>
+                )}
                 <button
                   className="header-action-btn"
                   onClick={() => exportSliceQA(curIdx)}
@@ -969,6 +1508,65 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                 </button>
               </div>
             </div>
+            {(pendingRevisit || (revisitOpen && revisitEntries.length > 0)) && (
+              <div className="revisit-panel">
+                {pendingRevisit && (
+                  <div className="rv-draft">
+                    <div className="rv-draft-excerpt">
+                      ⏳「{pendingRevisit.anchor.excerpt || "…"}」
+                    </div>
+                    <select
+                      className="rv-select"
+                      value={revisitManualTarget ?? "__auto__"}
+                      onChange={(e) =>
+                        setRevisitManualTarget(
+                          e.target.value === "__auto__" ? null : e.target.value
+                        )
+                      }
+                    >
+                      <option value="__auto__">{revisitAutoLabel}</option>
+                      {draftTargets.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          到「{s.title}」时提醒
+                        </option>
+                      ))}
+                      <option value="">仅加入待回看</option>
+                    </select>
+                    <div className="rv-draft-ops">
+                      <button
+                        className="primary"
+                        disabled={autoPending}
+                        title={autoPending ? "AI 正在查找相关段落…" : undefined}
+                        onClick={saveRevisit}
+                      >
+                        保存
+                      </button>
+                      <button
+                        className="link"
+                        onClick={() => setPendingRevisit(null)}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {revisitOpen && (
+                  <div className="rv-list">
+                    {revisitEntries.map((e) => revisitRow(e))}
+                  </div>
+                )}
+              </div>
+            )}
+            {dueRevisit.length > 0 && (
+              <div className="revisit-due">
+                <div className="revisit-due-head">
+                  ⏰ 到这一段了，有 {dueRevisit.length} 处待回看
+                </div>
+                <div className="rv-due-items">
+                  {dueRevisit.map((e) => revisitRow(e))}
+                </div>
+              </div>
+            )}
             <div className="chat-body">
               <ChatIndex
                 containerRef={chatScrollRef}

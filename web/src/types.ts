@@ -39,12 +39,25 @@ export interface InlineThread {
   detail?: Detail;
 }
 
+/** 「以后再看」待回看提醒：挂在源 assistant 消息上，start/end 与 TextMark 同一 textContent 坐标系。 */
+export interface RevisitReminder {
+  id: string;
+  start: number;
+  end: number;
+  /** 选中文字摘录（截断 ~120 字） */
+  excerpt: string;
+  /** 到达该段落时提醒；空 = 仅加入待回看列表 */
+  targetSliceId?: string;
+}
+
 export interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   selection?: { startLine: number; endLine: number };
   marks?: TextMark[];
   threads?: InlineThread[];
+  /** 未回看的「以后再看」提醒（已回看的会移除，不影响标注/追问） */
+  revisitReminders?: RevisitReminder[];
 }
 
 /** [msgIdx, threadId, msgIdx, …]（奇数长度）：定位某条消息，可穿越任意层追问。 */
@@ -87,10 +100,21 @@ export interface FileViewState {
   messages: ChatMsg[];
 }
 
+/** 侧栏工作区分组文件夹：仅组织展示，不对应磁盘目录。 */
+export interface WsFolder {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
 export interface Workspace {
   id: string;
   root: string;
+  /** 所属分组文件夹 id，空 = 未分组 */
+  folderId?: string;
   name: string;
+  /** 侧栏等处展示的自定义名称（别名），空 = 显示真实目录名 name */
+  alias?: string;
   tree: TreeNode[];
   truncated: boolean;
   overview?: string;

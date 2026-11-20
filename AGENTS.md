@@ -41,3 +41,4 @@ npm run typecheck -w web      # 前端类型检查
 - 嵌入式追问存 `ChatMsg.threads`（`InlineThread`，start/end 与 TextMark 同一 textContent 坐标系，blockEnd 是所在块 hast position.end.offset，-1 插到消息末尾）；定位路径 `MsgPath`/`ThreadPath` 与不可变树操作在 `web/src/threads.ts`（有单测）。`MarkableMarkdown` 计算偏移时一律跳过 `.inline-thread` 内的文字，保证追问 UI 不污染坐标；宿主通过 `ThreadCtx` 注入回调，无 provider 时退化为纯渲染。概览页的追问挂在 `Workspace.overviewThreads`/`overviewMarks` 上。
 - 索引条（`ChatIndex`）与右缘导航点（`MarkRail`）支持右键删除标注/追问，宿主通过 `onDeleteMark`/`onDeleteThread` 回调落到 `updateMsg`/`removeThread`。
 - 各栏 Ctrl+滚轮独立缩放走 `web/src/paneZoom.ts` 的 `usePaneZoom`：原生非 passive wheel 监听 + 元素 `--z` 变量，相关 `font-size` 用 `calc(Npx * var(--z,1))`，系数存 `codeslice:layout` 的 `zCode/zSlices/zChat/zOverview/zSidebar`（0.7–2）。
+- 代码区双击标识符 → 底部「关联位置」面板（`web/src/symbolRefs.ts` 纯函数，有单测）：同文件按名称匹配 + 规则分类（定义/赋值/调用/导入/引用/文本），不做作用域分析；跳转只滚动代码不切换当前段；同名高亮走 CSS Custom Highlight（`cs-symref`/`cs-symref-cur`）。

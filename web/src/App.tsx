@@ -4,16 +4,20 @@ import Reader, { type ReaderHandle } from "./Reader";
 import WorkspaceMain from "./WorkspaceView";
 import { Sidebar, type Route } from "./Sidebar";
 import { IconCode, IconFolder, IconRefresh } from "./icons";
-import type { Session, TreeNode, Workspace } from "./types";
+import type { Session, TreeNode, Workspace, WsFolder } from "./types";
 import {
+  deleteFolder,
   deleteSession,
   deleteWorkspace,
+  loadFolders,
   loadSessions,
   loadWorkspaces,
+  remapFilePath,
+  saveFolder,
   saveSession,
   saveWorkspace,
 } from "./store";
-import { openWorkspace } from "./api";
+import { openWorkspace, renameWorkspacePath } from "./api";
 import { loadLayout, saveLayout } from "./layout";
 import { applyTheme, loadTheme, saveTheme, type Theme } from "./theme";
 
@@ -41,6 +45,7 @@ function ExpandIcon() {
 
 export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>(loadWorkspaces);
+  const [folders, setFolders] = useState<WsFolder[]>(loadFolders);
   const [sessions, setSessions] = useState<Session[]>(loadSessions);
   const [route, setRoute] = useState<Route>(loadRoute);
   const [theme, setTheme] = useState<Theme>(loadTheme);
@@ -119,12 +124,68 @@ export default function App() {
   }
 
   function removeWorkspace(w: Workspace) {
-    if (!window.confirm(`删除工作区「${w.name}」及其所有阅读记录？`)) return;
+    if (!window.confirm(`删除工作区「${w.alias || w.name}」及其所有阅读记录？`)) return;
     deleteWorkspace(w.id);
     setWorkspaces(loadWorkspaces());
     setSessions(loadSessions());
     if (route.kind === "workspace" && route.workspaceId === w.id) {
       setRoute({ kind: "new" });
+    }
+  }
+
+  // ---------- 工作区分组文件夹 ----------
+  function createFolder(name: string): WsFolder {
+    const f: WsFolder = {
+      id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      createdAt: Date.now(),
+    };
+    saveFolder(f);
+    setFolders(loadFolders());
+    return f;
+  }
+
+  function renameFolder(f: WsFolder, name: string) {
+    saveFolder({ ...f, name });
+    setFolders(loadFolders());
+  }
+
+  function removeFolder(f: WsFolder) {
+    if (!window.confirm(`删除文件夹「${f.name}」？其中的工作区会移回未分组。`)) return;
+    deleteFolder(f.id);
+    setFolders(loadFolders());
+    setWorkspaces(loadWorkspaces());
+  }
+
+  function moveWorkspace(w: Workspace, folderId: string | null) {
+    updateWorkspace({ ...w, folderId: folderId ?? undefined });
+  }
+
+  /** 工作区显示别名（不改磁盘），空串或与原名相同则清除别名。 */
+  function renameWorkspace(w: Workspace, alias: string) {
+    updateWorkspace({ ...w, alias: alias && alias !== w.name ? alias : undefined });
+  }
+
+  // ---------- 工作区内文件/文件夹重命名 ----------
+  async function renamePath(w: Workspace, oldPath: string, newName: string) {
+    try {
+      const { path: newPath } = await renameWorkspacePath(w.root, oldPath, newName);
+      remapFilePath(w.id, oldPath, newPath);
+      setSessions(loadSessions());
+      const fresh = loadWorkspaces().find((x) => x.id === w.id) ?? w;
+      const r = await openWorkspace(w.root);
+      updateWorkspace({ ...fresh, tree: r.tree, truncated: r.truncated, name: r.name });
+      if (route.kind === "workspace" && route.workspaceId === w.id && route.filePath) {
+        const np =
+          route.filePath === oldPath
+            ? newPath
+            : route.filePath.startsWith(oldPath + "/")
+              ? newPath + route.filePath.slice(oldPath.length)
+              : route.filePath;
+        if (np !== route.filePath) setRoute({ ...route, filePath: np });
+      }
+    } catch (e) {
+      window.alert(`重命名失败：${(e as Error).message}`);
     }
   }
 
@@ -260,7 +321,7 @@ export default function App() {
           onClick={() => setRoute({ kind: "workspace", workspaceId: curWorkspace.id })}
         >
           <IconFolder size={14} />
-          <span>{curWorkspace.name}</span>
+          <span>{curWorkspace.alias || curWorkspace.name}</span>
         </button>
         <span className="crumb-sep">/</span>
         <span className="reader-title">
@@ -306,12 +367,19 @@ export default function App() {
           <div className="sidebar-wrap" style={{ width: sidebarPx }}>
             <Sidebar
               workspaces={workspaces}
+              folders={folders}
               sessions={sessions}
               route={route}
               onNavigate={setRoute}
               onDeleteWorkspace={removeWorkspace}
               onDeleteSession={removeSession}
               onRefreshWorkspace={refreshWorkspace}
+              onCreateFolder={createFolder}
+              onRenameFolder={renameFolder}
+              onDeleteFolder={removeFolder}
+              onMoveWorkspace={moveWorkspace}
+              onRenameWorkspace={renameWorkspace}
+              onRenamePath={renamePath}
               theme={theme}
               onToggleTheme={toggleTheme}
               onCollapse={() => {

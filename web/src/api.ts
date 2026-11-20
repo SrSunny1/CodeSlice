@@ -127,6 +127,21 @@ export async function readWorkspaceFile(
   return res.json();
 }
 
+/** 重命名工作区内的文件/文件夹（同目录改名），返回新的相对路径。 */
+export async function renameWorkspacePath(
+  root: string,
+  path: string,
+  newName: string
+): Promise<{ path: string }> {
+  const res = await fetch("/api/workspace/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root, path, newName }),
+  });
+  await checkErr(res);
+  return res.json();
+}
+
 export function streamOverview(
   root: string,
   onDelta: (t: string) => void,
@@ -167,6 +182,25 @@ export function streamSliceQA(
   signal?: AbortSignal
 ): Promise<string> {
   return streamPost("/api/slice-qa", args, onDelta, signal);
+}
+
+/** 「以后再看」：让 AI 在 source 之后的候选段落里找与摘录相关的最后一处（0-based 下标，null=无建议）。 */
+export async function suggestRevisitTarget(
+  input: {
+    excerpt: string;
+    source: { title: string; code: string };
+    candidates: { title: string; code: string }[];
+  },
+  signal?: AbortSignal
+): Promise<{ targetIndex: number | null }> {
+  const res = await fetch("/api/revisit/target", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  await checkErr(res);
+  return (await res.json()) as { targetIndex: number | null };
 }
 
 /** 把若干 md 文件写入 <base>/summary/<sub>/ 目录，返回实际写入的文件名与目录。 */

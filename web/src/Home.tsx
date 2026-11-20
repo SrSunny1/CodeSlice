@@ -220,7 +220,7 @@ export default function NewPage({
                 >
                   <div className="recent-card-icon">📁</div>
                   <div className="recent-body">
-                    <div className="recent-title">{w.name}</div>
+                    <div className="recent-title">{w.alias || w.name}</div>
                     <div className="recent-meta">
                       {doneSessions.length} 个文件已读 · {allDone} 个全部懂
                     </div>

@@ -101,6 +101,32 @@ export async function resolveInside(root: string, rel: string): Promise<string> 
   return target;
 }
 
+/** 重命名 root 内的文件或文件夹，返回新的 root 相对 posix 路径。 */
+export async function renameInside(root: string, rel: string, newName: string): Promise<string> {
+  const name = newName.trim();
+  if (!rel || rel === "." || rel === "/") throw new Error("不能重命名项目根目录。");
+  if (
+    !name ||
+    name === "." ||
+    name === ".." ||
+    /[/\\<>:"|?*]/.test(name) ||
+    [...name].some((c) => c.charCodeAt(0) < 32)
+  ) {
+    throw new Error('文件名不合法：不能含 / \\ < > : " | ? * 或控制字符。');
+  }
+  const absOld = await resolveInside(root, rel);
+  if (!(await fsp.stat(absOld).catch(() => null))) throw new Error("目标不存在。");
+  const realRoot = await fsp.realpath(root);
+  const absNew = path.join(path.dirname(absOld), name);
+  const relTo = path.relative(realRoot, absNew);
+  if (!relTo || relTo === ".." || relTo.startsWith(`..${path.sep}`) || path.isAbsolute(relTo)) {
+    throw new Error("路径越界：只能操作项目目录内的文件。");
+  }
+  if (await fsp.stat(absNew).catch(() => null)) throw new Error("已存在同名文件或文件夹。");
+  await fsp.rename(absOld, absNew);
+  return relTo.split(path.sep).join("/");
+}
+
 const LANG_MAP: Record<string, string> = {
   py: "python", js: "javascript", mjs: "javascript", cjs: "javascript",
   jsx: "javascript", ts: "typescript", mts: "typescript", cts: "typescript",

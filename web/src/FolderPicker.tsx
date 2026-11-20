@@ -55,11 +55,12 @@ export default function FolderPicker({
   // 把当前路径拆成可点击的面包屑段（跳过根前缀，只保留有意义的层级）
   const crumbs = useMemo(() => {
     if (!data?.current) return [];
+    const sep = data.current.includes("\\") ? "\\" : "/";
     const parts = data.current.split(/[\\/]+/).filter(Boolean);
     const out: { label: string; path: string }[] = [];
-    let acc = "";
+    let acc = data.current.startsWith(sep) ? sep : "";
     for (let i = 0; i < parts.length; i++) {
-      acc = i === 0 ? parts[i] : `${acc}${data.current.includes("\\") ? "\\" : "/"}${parts[i]}`;
+      acc = i === 0 ? acc + parts[i] : `${acc}${sep}${parts[i]}`;
       out.push({ label: parts[i], path: acc });
     }
     return out;

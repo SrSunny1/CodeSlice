@@ -5,6 +5,7 @@ import {
   flattenQA,
   getMsg,
   getThread,
+  groupIndex,
   indexTree,
   pathKey,
   removeThread,
@@ -181,6 +182,29 @@ describe("indexTree", () => {
     const t1 = tree[4] as Extract<(typeof tree)[number], { kind: "thread" }>;
     expect(t1.path).toEqual([1, "t1"]);
     expect(t1.children[0]).toMatchObject({ kind: "q", path: [1, "t1", 0] });
+  });
+});
+
+describe("groupIndex", () => {
+  it("按「问」分组：标注与追问归入上一个问，首个问之前的节点归入 q=null 组", () => {
+    const msgs: ChatMsg[] = [
+      A("doc", { marks: [{ start: 0, end: 2, color: "y" }] }),
+      U("q0"),
+      A("a1", {
+        marks: [{ start: 1, end: 3, color: "g" }],
+        threads: [thread("t1", [U("tq")])],
+      }),
+      U("q2"),
+      A("a3"),
+    ];
+    const groups = groupIndex(indexTree(msgs));
+    expect(groups).toHaveLength(3);
+    expect(groups[0].q).toBeNull();
+    expect(groups[0].rows.map((n) => n.kind)).toEqual(["mark"]);
+    expect(groups[1].q?.kind).toBe("q");
+    expect(groups[1].rows.map((n) => n.kind)).toEqual(["mark", "thread"]);
+    expect(groups[2].q?.kind).toBe("q");
+    expect(groups[2].rows).toHaveLength(0);
   });
 });
 

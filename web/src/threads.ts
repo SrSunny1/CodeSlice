@@ -274,3 +274,27 @@ export function indexTree(msgs: ChatMsg[], base: MsgPath = []): IndexNode[] {
   });
   return out;
 }
+
+export type IndexQNode = Extract<IndexNode, { kind: "q" }>;
+
+export interface IndexGroup {
+  /** 组头问题；为 null 表示首个问题之前的标注/追问（如文档正文上的） */
+  q: IndexQNode | null;
+  /** 属于该问题的标注与追问（按文档顺序） */
+  rows: IndexNode[];
+}
+
+/** 把平铺索引按「问」分组：每个 q 节点收编到下一个 q 之前的标注/追问。 */
+export function groupIndex(nodes: IndexNode[]): IndexGroup[] {
+  const out: IndexGroup[] = [];
+  for (const n of nodes) {
+    if (n.kind === "q") {
+      out.push({ q: n, rows: [] });
+    } else if (out.length) {
+      out[out.length - 1].rows.push(n);
+    } else {
+      out.push({ q: null, rows: [n] });
+    }
+  }
+  return out;
+}

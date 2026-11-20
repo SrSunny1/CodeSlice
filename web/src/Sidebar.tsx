@@ -15,7 +15,14 @@ import {
   IconTrash,
 } from "./icons";
 import type { Theme } from "./theme";
-import type { Session, TreeNode, Workspace } from "./types";
+import type { Session, TreeNode, Workspace, WsFolder } from "./types";
+
+const WS_DRAG = "application/x-codeslice-ws";
+
+type CtxMenu =
+  | { kind: "file"; x: number; y: number; wsId: string; path: string; hasSession: boolean; isDir: boolean }
+  | { kind: "ws"; x: number; y: number; ws: Workspace }
+  | { kind: "folder"; x: number; y: number; folder: WsFolder };
 
 export type Route =
   | { kind: "new" }
@@ -56,30 +63,45 @@ function filterTree(nodes: TreeNode[], q: string): TreeNode[] {
 
 export function Sidebar({
   workspaces,
+  folders,
   sessions,
   route,
   onNavigate,
   onDeleteWorkspace,
   onDeleteSession,
   onRefreshWorkspace,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMoveWorkspace,
+  onRenameWorkspace,
+  onRenamePath,
   theme,
   onToggleTheme,
   onCollapse,
 }: {
   workspaces: Workspace[];
+  folders: WsFolder[];
   sessions: Session[];
   route: Route;
   onNavigate: (r: Route) => void;
   onDeleteWorkspace: (w: Workspace) => void;
   onDeleteSession: (s: Session) => void;
   onRefreshWorkspace: (w: Workspace) => void;
+  onCreateFolder: (name: string) => WsFolder;
+  onRenameFolder: (f: WsFolder, name: string) => void;
+  onDeleteFolder: (f: WsFolder) => void;
+  onMoveWorkspace: (w: Workspace, folderId: string | null) => void;
+  onRenameWorkspace: (w: Workspace, alias: string) => void;
+  onRenamePath: (w: Workspace, path: string, newName: string) => void | Promise<void>;
   theme: Theme;
   onToggleTheme: () => void;
   onCollapse: () => void;
 }) {
   const [sb, setSb] = useState(loadSidebarState);
   const [query, setQuery] = useState("");
-  const [menu, setMenu] = useState<{ x: number; y: number; wsId: string; path: string; hasSession: boolean } | null>(null);
+  const [menu, setMenu] = useState<CtxMenu | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | "root" | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const sbRef = useRef<HTMLElement>(null);
   usePaneZoom(sbRef, "zSidebar");
@@ -140,6 +162,49 @@ export function Sidebar({
     updateSb({ ...sb, dirExpanded: { ...sb.dirExpanded, [wsId]: [...cur] } });
   }
 
+  // ---------- 分组文件夹 ----------
+  function toggleFolder(id: string) {
+    const cur = new Set(sb.folderCollapsed);
+    if (cur.has(id)) cur.delete(id);
+    else cur.add(id);
+    updateSb({ ...sb, folderCollapsed: [...cur] });
+  }
+
+  function createFolderPrompt(): WsFolder | null {
+    const name = window.prompt("文件夹名称：", "新建文件夹")?.trim();
+    return name ? onCreateFolder(name) : null;
+  }
+
+  function dropWs(e: React.DragEvent, folderId: string | null) {
+    e.preventDefault();
+    setDropTarget(null);
+    const id = e.dataTransfer.getData(WS_DRAG);
+    const w = workspaces.find((x) => x.id === id);
+    if (w && (w.folderId ?? null) !== folderId) onMoveWorkspace(w, folderId);
+  }
+
+  function dragOver(e: React.DragEvent, target: string | "root") {
+    if (!e.dataTransfer.types.includes(WS_DRAG)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget(target);
+  }
+
+  const wsMatches = (w: Workspace) =>
+    !q ||
+    filterTree(w.tree, q).length > 0 ||
+    (w.alias || w.name).toLowerCase().includes(q) ||
+    w.name.toLowerCase().includes(q);
+
+  const folderIds = new Set(folders.map((f) => f.id));
+  const ungrouped = workspaces.filter((w) => !w.folderId || !folderIds.has(w.folderId));
+  const visibleFolders = folders.filter(
+    (f) =>
+      !q ||
+      f.name.toLowerCase().includes(q) ||
+      workspaces.some((w) => w.folderId === f.id && wsMatches(w))
+  );
+
   function renderTree(ws: Workspace, nodes: TreeNode[], depth: number): React.ReactNode {
     const openDirs = new Set(sb.dirExpanded[ws.id] ?? []);
     return nodes.map((n) => {
@@ -151,6 +216,10 @@ export function Sidebar({
               className="sb-row dir"
               style={{ paddingLeft: 12 + depth * 13 }}
               onClick={() => toggleDir(ws.id, n.path)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({ kind: "file", x: e.clientX, y: e.clientY, wsId: ws.id, path: n.path, hasSession: false, isDir: true });
+              }}
             >
               <span className="caret">{open ? "▾" : "▸"}</span>
               <span className="sb-item-icon dir-icon">
@@ -182,7 +251,7 @@ export function Sidebar({
           }
           onContextMenu={(e) => {
             e.preventDefault();
-            setMenu({ x: e.clientX, y: e.clientY, wsId: ws.id, path: n.path, hasSession: !!fs });
+            setMenu({ kind: "file", x: e.clientX, y: e.clientY, wsId: ws.id, path: n.path, hasSession: !!fs, isDir: false });
           }}
           title={n.path}
         >
@@ -194,6 +263,88 @@ export function Sidebar({
         </button>
       );
     });
+  }
+
+  function renderWorkspace(w: Workspace) {
+    if (!wsMatches(w)) return null;
+    const isCur = route.kind === "workspace" && route.workspaceId === w.id;
+    const filteredTree = filterTree(w.tree, q);
+    const open = q ? true : sb.wsExpanded.includes(w.id);
+    return (
+      <div key={w.id} className="sb-ws-block">
+        <div
+          className={`sb-ws-row ${isCur && !route.filePath ? "active" : ""}`}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData(WS_DRAG, w.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onDragEnd={() => setDropTarget(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ kind: "ws", x: e.clientX, y: e.clientY, ws: w });
+          }}
+        >
+          <button
+            className="sb-row ws-root-row"
+            title={w.root}
+            onClick={() => {
+              if (!isCur) {
+                onNavigate({ kind: "workspace", workspaceId: w.id });
+                if (!open) updateSb({ ...sb, wsExpanded: [...sb.wsExpanded, w.id] });
+              } else {
+                updateSb({
+                  ...sb,
+                  wsExpanded: open
+                    ? sb.wsExpanded.filter((x) => x !== w.id)
+                    : [...sb.wsExpanded, w.id],
+                });
+              }
+            }}
+          >
+            <span className="caret">{open ? "▾" : "▸"}</span>
+            <span className="sb-item-icon ws-icon">
+              {open ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
+            </span>
+            <span className="sb-name">{w.alias || w.name}</span>
+          </button>
+          <span className="sb-hover-actions">
+            <button
+              className="sb-icon-btn"
+              title="刷新文件树"
+              onClick={() => onRefreshWorkspace(w)}
+            >
+              <IconRefresh size={12} />
+            </button>
+            <button
+              className="sb-icon-btn danger"
+              title="删除工作区"
+              onClick={() => onDeleteWorkspace(w)}
+            >
+              <IconTrash size={12} />
+            </button>
+          </span>
+        </div>
+        {open && (
+          <div className="sb-ws-children">
+            <button
+              className={`sb-row ${isCur && !route.filePath ? "active" : ""}`}
+              style={{ paddingLeft: 24 }}
+              onClick={() => onNavigate({ kind: "workspace", workspaceId: w.id })}
+            >
+              <span className="sb-item-icon ov-icon">
+                <IconOverview size={13} />
+              </span>
+              <span className="sb-name">项目概览</span>
+            </button>
+            {renderTree(w, filteredTree, 1)}
+            {w.truncated && !q && (
+              <div className="sb-truncated">文件较多，仅展示前序部分</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -240,82 +391,73 @@ export function Sidebar({
       )}
 
       <div className="sb-scroll">
-        {workspaces.length > 0 && (
+        {(workspaces.length > 0 || folders.length > 0) && (
           <div className="sb-group">
-            <div className="sb-group-title">工作区 ({workspaces.length})</div>
-            {workspaces.map((w) => {
-              const isCur = route.kind === "workspace" && route.workspaceId === w.id;
-              const filteredTree = filterTree(w.tree, q);
-              if (q && filteredTree.length === 0 && !w.name.toLowerCase().includes(q)) {
-                return null;
-              }
-              const open = q ? true : sb.wsExpanded.includes(w.id);
+            <div
+              className={`sb-group-title${dropTarget === "root" ? " drop" : ""}`}
+              title="工作区；把工作区拖到此处可移出文件夹"
+              onDragOver={(e) => dragOver(e, "root")}
+              onDragLeave={() => setDropTarget(null)}
+              onDrop={(e) => dropWs(e, null)}
+            >
+              <span>工作区 ({workspaces.length})</span>
+              <button
+                className="sb-icon-btn"
+                title="新建文件夹（归类工作区）"
+                onClick={() => createFolderPrompt()}
+              >
+                <IconPlus size={12} />
+              </button>
+            </div>
+            {visibleFolders.map((f) => {
+              const members = workspaces.filter((w) => w.folderId === f.id);
+              const collapsed = !q && sb.folderCollapsed.includes(f.id);
               return (
-                <div key={w.id} className="sb-ws-block">
-                  <div className={`sb-ws-row ${isCur && !route.filePath ? "active" : ""}`}>
+                <div key={f.id} className={`sb-folder${dropTarget === f.id ? " drop" : ""}`}>
+                  <div
+                    className="sb-ws-row"
+                    onDragOver={(e) => dragOver(e, f.id)}
+                    onDragLeave={() => setDropTarget(null)}
+                    onDrop={(e) => dropWs(e, f.id)}
+                  >
                     <button
-                      className="sb-row ws-root-row"
-                      onClick={() => {
-                        if (!isCur) {
-                          onNavigate({ kind: "workspace", workspaceId: w.id });
-                          if (!open)
-                            updateSb({ ...sb, wsExpanded: [...sb.wsExpanded, w.id] });
-                        } else {
-                          updateSb({
-                            ...sb,
-                            wsExpanded: open
-                              ? sb.wsExpanded.filter((x) => x !== w.id)
-                              : [...sb.wsExpanded, w.id],
-                          });
-                        }
+                      className="sb-row dir"
+                      onClick={() => toggleFolder(f.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu({ kind: "folder", x: e.clientX, y: e.clientY, folder: f });
                       }}
+                      title={f.name}
                     >
-                      <span className="caret">{open ? "▾" : "▸"}</span>
-                      <span className="sb-item-icon ws-icon">
-                        {open ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
+                      <span className="caret">{collapsed ? "▸" : "▾"}</span>
+                      <span className="sb-item-icon dir-icon">
+                        {collapsed ? <IconFolder size={13} /> : <IconFolderOpen size={13} />}
                       </span>
-                      <span className="sb-name">{w.name}</span>
+                      <span className="sb-name">{f.name}</span>
+                      <span className="sb-count">{members.length}</span>
                     </button>
                     <span className="sb-hover-actions">
                       <button
-                        className="sb-icon-btn"
-                        title="刷新文件树"
-                        onClick={() => onRefreshWorkspace(w)}
-                      >
-                        <IconRefresh size={12} />
-                      </button>
-                      <button
                         className="sb-icon-btn danger"
-                        title="删除工作区"
-                        onClick={() => onDeleteWorkspace(w)}
+                        title="删除文件夹（工作区移回未分组）"
+                        onClick={() => onDeleteFolder(f)}
                       >
                         <IconTrash size={12} />
                       </button>
                     </span>
                   </div>
-                  {open && (
-                    <div className="sb-ws-children">
-                      <button
-                        className={`sb-row ${isCur && !route.filePath ? "active" : ""}`}
-                        style={{ paddingLeft: 24 }}
-                        onClick={() =>
-                          onNavigate({ kind: "workspace", workspaceId: w.id })
-                        }
-                      >
-                        <span className="sb-item-icon ov-icon">
-                          <IconOverview size={13} />
-                        </span>
-                        <span className="sb-name">项目概览</span>
-                      </button>
-                      {renderTree(w, filteredTree, 1)}
-                      {w.truncated && !q && (
-                        <div className="sb-truncated">文件较多，仅展示前序部分</div>
+                  {!collapsed && (
+                    <div className="sb-folder-body">
+                      {members.map(renderWorkspace)}
+                      {members.length === 0 && (
+                        <div className="sb-folder-empty">把工作区拖到此文件夹</div>
                       )}
                     </div>
                   )}
                 </div>
               );
             })}
+            {ungrouped.map(renderWorkspace)}
           </div>
         )}
 
@@ -366,7 +508,7 @@ export function Sidebar({
         </span>
       </div>
 
-      {menu && (
+      {menu?.kind === "file" && (
         <div
           ref={menuRef}
           className="ctx-menu file-menu"
@@ -375,33 +517,143 @@ export function Sidebar({
             top: Math.min(menu.y, window.innerHeight - 100),
           }}
         >
+          {!menu.isDir && (
+            <>
+              <button
+                className="ctx-item"
+                onClick={() => {
+                  onNavigate({
+                    kind: "workspace",
+                    workspaceId: menu.wsId,
+                    filePath: menu.path,
+                    fileMode: "view",
+                  });
+                  setMenu(null);
+                }}
+              >
+                打开
+              </button>
+              <button
+                className="ctx-item"
+                onClick={() => {
+                  onNavigate({
+                    kind: "workspace",
+                    workspaceId: menu.wsId,
+                    filePath: menu.path,
+                    fileMode: "slice",
+                  });
+                  setMenu(null);
+                }}
+              >
+                {menu.hasSession ? "切分阅读（继续）" : "切分阅读"}
+              </button>
+            </>
+          )}
+          <button
+            className="ctx-item"
+            onClick={async () => {
+              const ws = workspaces.find((w) => w.id === menu.wsId);
+              const cur = menu.path.split("/").pop() ?? "";
+              const name = window.prompt("重命名为：", cur)?.trim();
+              setMenu(null);
+              if (ws && name && name !== cur) await onRenamePath(ws, menu.path, name);
+            }}
+          >
+            重命名…
+          </button>
+        </div>
+      )}
+
+      {menu?.kind === "ws" && (
+        <div
+          ref={menuRef}
+          className="ctx-menu file-menu"
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 180),
+            top: Math.min(menu.y, window.innerHeight - 240),
+          }}
+        >
           <button
             className="ctx-item"
             onClick={() => {
-              onNavigate({
-                kind: "workspace",
-                workspaceId: menu.wsId,
-                filePath: menu.path,
-                fileMode: "view",
-              });
+              const input = window.prompt(
+                "工作区显示名（留空恢复原名）：",
+                menu.ws.alias ?? menu.ws.name
+              );
+              setMenu(null);
+              if (input !== null) onRenameWorkspace(menu.ws, input.trim());
+            }}
+          >
+            重命名（显示名）…
+          </button>
+          <div className="ctx-label">移动到文件夹</div>
+          {folders.map((f) => (
+            <button
+              key={f.id}
+              className="ctx-item"
+              disabled={menu.ws.folderId === f.id}
+              onClick={() => {
+                onMoveWorkspace(menu.ws, f.id);
+                setMenu(null);
+              }}
+            >
+              {menu.ws.folderId === f.id ? "✓ " : ""}
+              {f.name}
+            </button>
+          ))}
+          <button
+            className="ctx-item"
+            onClick={() => {
+              const f = createFolderPrompt();
+              if (f) onMoveWorkspace(menu.ws, f.id);
               setMenu(null);
             }}
           >
-            打开
+            ＋ 新建文件夹…
+          </button>
+          {menu.ws.folderId && (
+            <button
+              className="ctx-item"
+              onClick={() => {
+                onMoveWorkspace(menu.ws, null);
+                setMenu(null);
+              }}
+            >
+              移出文件夹
+            </button>
+          )}
+        </div>
+      )}
+
+      {menu?.kind === "folder" && (
+        <div
+          ref={menuRef}
+          className="ctx-menu file-menu"
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 180),
+            top: Math.min(menu.y, window.innerHeight - 140),
+          }}
+        >
+          <button
+            className="ctx-item"
+            onClick={() => {
+              const name = window
+                .prompt("重命名文件夹：", menu.folder.name)
+                ?.trim();
+              if (name) onRenameFolder(menu.folder, name);
+              setMenu(null);
+            }}
+          >
+            重命名…
           </button>
           <button
             className="ctx-item"
             onClick={() => {
-              onNavigate({
-                kind: "workspace",
-                workspaceId: menu.wsId,
-                filePath: menu.path,
-                fileMode: "slice",
-              });
+              onDeleteFolder(menu.folder);
               setMenu(null);
             }}
           >
-            {menu.hasSession ? "切分阅读（继续）" : "切分阅读"}
+            删除文件夹
           </button>
         </div>
       )}
