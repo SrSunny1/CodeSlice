@@ -198,12 +198,19 @@ export function Sidebar({
 
   const folderIds = new Set(folders.map((f) => f.id));
   const ungrouped = workspaces.filter((w) => !w.folderId || !folderIds.has(w.folderId));
+  const visibleUngrouped = ungrouped.filter(wsMatches);
   const visibleFolders = folders.filter(
     (f) =>
       !q ||
       f.name.toLowerCase().includes(q) ||
       workspaces.some((w) => w.folderId === f.id && wsMatches(w))
   );
+  const hasVisibleWs =
+    visibleFolders.some((f) =>
+      workspaces.some((w) => w.folderId === f.id && wsMatches(w))
+    ) ||
+    visibleFolders.length > 0 ||
+    visibleUngrouped.length > 0;
 
   function renderTree(ws: Workspace, nodes: TreeNode[], depth: number): React.ReactNode {
     const openDirs = new Set(sb.dirExpanded[ws.id] ?? []);
@@ -378,9 +385,16 @@ export function Sidebar({
           </span>
           <input
             className="sb-search"
+            aria-label="搜索文件或代码片段"
             value={query}
             placeholder="搜索文件或代码片段…"
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.stopPropagation();
+                setQuery("");
+              }
+            }}
           />
           {query && (
             <button className="sb-search-clear" onClick={() => setQuery("")} title="清空">
@@ -494,7 +508,7 @@ export function Sidebar({
           </div>
         )}
 
-        {workspaces.length === 0 && snippets.length === 0 && (
+        {!hasVisibleWs && snippets.length === 0 && (
           <div className="sb-empty">
             {q ? "没有匹配的文件或会话" : "暂无工作区或代码片段"}
           </div>

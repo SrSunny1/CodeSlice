@@ -182,6 +182,7 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
   const bodyRef = useRef<HTMLDivElement>(null);
   const sideRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const codePaneRef = useRef<HTMLDivElement>(null);
   const sliceListRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<"v" | "h" | null>(null);
@@ -1577,7 +1578,14 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
                 onDeleteMark={deleteMarkAt}
                 onDeleteThread={deleteThreadAt}
               />
-              <div className="chat-messages" ref={chatScrollRef}>
+              <div
+                className="chat-messages"
+                ref={chatScrollRef}
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 200);
+                }}
+              >
               <ThreadCtx.Provider value={threadCtx}>
               {cur && cur.messages.length === 0 && !streaming && (
                 <div className="chat-empty-card">
@@ -1624,6 +1632,21 @@ const Reader = forwardRef<ReaderHandle, ReaderProps>(function Reader(
               <div ref={chatEndRef} />
               </ThreadCtx.Provider>
               </div>
+              {showScrollDown && (
+                <button
+                  type="button"
+                  className="chat-scroll-bottom"
+                  aria-label="回到底部"
+                  title="回到底部"
+                  onClick={() => {
+                    const el = chatScrollRef.current;
+                    if (el) el.scrollTop = el.scrollHeight;
+                    setShowScrollDown(false);
+                  }}
+                >
+                  ↓ 回到底部
+                </button>
+              )}
             </div>
             {error && (
               <div className="error-box">
